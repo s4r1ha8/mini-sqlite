@@ -80,11 +80,16 @@ private:
 
 class ExecutorAdapter {
 public:
-    ExecutorAdapter(Pager& pager, Catalog& catalog)
+    ExecutorAdapter(
+        Pager& pager,
+        Catalog& catalog
+    )
         : pager_(pager),
           catalog_(catalog) {}
 
-    OperatorPtr build(const OperatorNode& node) {
+    OperatorPtr build(
+        const OperatorNode& node
+    ) {
         return std::visit(
             [this](const auto& op) -> OperatorPtr {
                 return buildNode(op);
@@ -103,7 +108,9 @@ private:
     // SeqScan
     // ========================================================================
 
-    OperatorPtr buildNode(const SeqScanOp& op) {
+    OperatorPtr buildNode(
+        const SeqScanOp& op
+    ) {
         const TableSchema* schema =
             catalog_.get_table(op.table_name);
 
@@ -125,7 +132,9 @@ private:
 
         return std::make_unique<SeqScan>(
             pager_,
-            static_cast<PageId>(schema->root_page_id),
+            static_cast<PageId>(
+                schema->root_page_id
+            ),
             schema->columns.size()
         );
     }
@@ -135,7 +144,9 @@ private:
     // IndexScan
     // ========================================================================
 
-    OperatorPtr buildNode(const IndexScanOp& op) {
+    OperatorPtr buildNode(
+        const IndexScanOp& op
+    ) {
         const TableSchema* schema =
             catalog_.get_table(op.table_name);
 
@@ -157,8 +168,12 @@ private:
 
         const IndexInfo* index = nullptr;
 
-        for (const auto& candidate : schema->indexes) {
-            if (candidate.name == op.index_name) {
+        for (const auto& candidate :
+             schema->indexes) {
+
+            if (candidate.name ==
+                op.index_name) {
+
                 index = &candidate;
                 break;
             }
@@ -183,26 +198,35 @@ private:
         }
 
         const auto* binary =
-            std::get_if<BinaryOp>(&op.key_condition.node);
+            std::get_if<BinaryOp>(
+                &op.key_condition.node
+            );
 
-        if (!binary || binary->op != "=") {
+        if (!binary ||
+            binary->op != "=") {
+
             throw std::runtime_error(
-                "ExecutorAdapter: IndexScan requires equality predicate"
+                "ExecutorAdapter: IndexScan "
+                "requires equality predicate"
             );
         }
 
         const Literal* literal =
-            std::get_if<Literal>(&binary->left->node);
+            std::get_if<Literal>(
+                &binary->left->node
+            );
 
         if (!literal) {
             literal =
-                std::get_if<Literal>(&binary->right->node);
+                std::get_if<Literal>(
+                    &binary->right->node
+                );
         }
 
         if (!literal) {
             throw std::runtime_error(
-                "ExecutorAdapter: IndexScan key condition "
-                "must contain a literal"
+                "ExecutorAdapter: IndexScan key "
+                "condition must contain a literal"
             );
         }
 
@@ -216,8 +240,12 @@ private:
 
         return std::make_unique<IndexScan>(
             pager_,
-            static_cast<PageId>(schema->root_page_id),
-            static_cast<PageId>(index->root_page_id),
+            static_cast<PageId>(
+                schema->root_page_id
+            ),
+            static_cast<PageId>(
+                index->root_page_id
+            ),
             schema->columns.size(),
             std::move(lookup_value)
         );
@@ -228,15 +256,19 @@ private:
     // Filter
     // ========================================================================
 
-    OperatorPtr buildNode(const FilterOp& op) {
-        OperatorPtr child = build(*op.child);
+    OperatorPtr buildNode(
+        const FilterOp& op
+    ) {
+        OperatorPtr child =
+            build(*op.child);
 
-        const TableSchema* schema =
+        auto schema =
             schemaForNode(*op.child);
 
         if (!schema) {
             throw std::runtime_error(
-                "ExecutorAdapter: cannot determine schema for Filter"
+                "ExecutorAdapter: cannot determine "
+                "schema for Filter"
             );
         }
 
@@ -246,11 +278,15 @@ private:
             );
 
         auto schema_copy =
-            std::make_shared<TableSchema>(*schema);
+            std::make_shared<TableSchema>(
+                *schema
+            );
 
         return std::make_unique<Filter>(
             std::move(child),
-            [predicate, schema_copy](const Row& row) {
+            [predicate, schema_copy](
+                const Row& row
+            ) {
                 return evalBool(
                     *predicate,
                     row,
@@ -265,55 +301,52 @@ private:
     // Sort
     // ========================================================================
 
-    OperatorPtr buildNode(const SortOp& op) {
-        OperatorPtr child = build(*op.child);
+    OperatorPtr buildNode(
+        const SortOp& op
+    ) {
+        OperatorPtr child =
+            build(*op.child);
 
-        const TableSchema* schema =
+        auto schema =
             schemaForNode(*op.child);
 
         if (!schema) {
             throw std::runtime_error(
-                "ExecutorAdapter: cannot determine schema for Sort"
+                "ExecutorAdapter: cannot determine "
+                "schema for Sort"
             );
         }
 
         std::vector<SortKey> keys;
-        keys.reserve(op.order_by.size());
+        keys.reserve(
+            op.order_by.size()
+        );
 
-        for (const auto& item : op.order_by) {
-            std::string column_name = item.column;
+        for (const auto& item :
+             op.order_by) {
 
-            const size_t dot =
-                column_name.find('.');
+            int ordinal =
+                findColumnOrdinal(
+                    *schema,
+                    item.column
+                );
 
-            if (dot != std::string::npos) {
-                column_name =
-                    column_name.substr(dot + 1);
-            }
-
-            bool found = false;
-
-            for (const auto& column : schema->columns) {
-                if (column.name == column_name) {
-                    keys.push_back(
-                        SortKey{
-                            static_cast<size_t>(column.ordinal),
-                            !item.ascending
-                        }
-                    );
-
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            if (ordinal < 0) {
                 throw std::runtime_error(
                     "ExecutorAdapter: ORDER BY column '" +
                     item.column +
                     "' not found"
                 );
             }
+
+            keys.push_back(
+                SortKey{
+                    static_cast<size_t>(
+                        ordinal
+                    ),
+                    !item.ascending
+                }
+            );
         }
 
         return std::make_unique<Sort>(
@@ -327,70 +360,78 @@ private:
     // Project
     // ========================================================================
 
-    OperatorPtr buildNode(const ProjectOp& op) {
-        OperatorPtr child = build(*op.child);
+    OperatorPtr buildNode(
+        const ProjectOp& op
+    ) {
+        OperatorPtr child =
+            build(*op.child);
 
-        const TableSchema* schema =
+        auto schema =
             schemaForNode(*op.child);
 
         if (!schema) {
             throw std::runtime_error(
-                "ExecutorAdapter: cannot determine schema for Project"
+                "ExecutorAdapter: cannot determine "
+                "schema for Project"
             );
         }
 
         std::vector<size_t> columns;
 
+
+        // --------------------------------------------------------------------
         // SELECT *
+        // --------------------------------------------------------------------
+
         if (op.columns.size() == 1 &&
             op.columns[0] == "*") {
 
-            columns.reserve(schema->columns.size());
+            columns.reserve(
+                schema->columns.size()
+            );
 
-            for (const auto& column : schema->columns) {
+            for (const auto& column :
+                 schema->columns) {
+
                 columns.push_back(
-                    static_cast<size_t>(column.ordinal)
+                    static_cast<size_t>(
+                        column.ordinal
+                    )
                 );
             }
 
         } else {
 
-            columns.reserve(op.columns.size());
+            // ---------------------------------------------------------------
+            // Explicit projection
+            // ---------------------------------------------------------------
 
-            for (const auto& requested : op.columns) {
-                std::string column_name =
-                    requested;
+            columns.reserve(
+                op.columns.size()
+            );
 
-                const size_t dot =
-                    column_name.find('.');
+            for (const auto& requested :
+                 op.columns) {
 
-                if (dot != std::string::npos) {
-                    column_name =
-                        column_name.substr(dot + 1);
-                }
+                int ordinal =
+                    findColumnOrdinal(
+                        *schema,
+                        requested
+                    );
 
-                bool found = false;
-
-                for (const auto& column : schema->columns) {
-                    if (column.name == column_name) {
-                        columns.push_back(
-                            static_cast<size_t>(
-                                column.ordinal
-                            )
-                        );
-
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
+                if (ordinal < 0) {
                     throw std::runtime_error(
                         "ExecutorAdapter: SELECT column '" +
                         requested +
                         "' not found"
                     );
                 }
+
+                columns.push_back(
+                    static_cast<size_t>(
+                        ordinal
+                    )
+                );
             }
         }
 
@@ -405,16 +446,19 @@ private:
     // Aggregate
     // ========================================================================
 
-    OperatorPtr buildNode(const AggregateOp& op) {
+    OperatorPtr buildNode(
+        const AggregateOp& op
+    ) {
         OperatorPtr child =
             build(*op.child);
 
-        const TableSchema* schema =
+        auto schema =
             schemaForNode(*op.child);
 
         if (!schema) {
             throw std::runtime_error(
-                "ExecutorAdapter: cannot determine schema for Aggregate"
+                "ExecutorAdapter: cannot determine "
+                "schema for Aggregate"
             );
         }
 
@@ -424,43 +468,33 @@ private:
         // --------------------------------------------------------------------
 
         std::vector<size_t> group_by_cols;
-        group_by_cols.reserve(op.group_by.size());
 
-        for (const auto& name : op.group_by) {
+        group_by_cols.reserve(
+            op.group_by.size()
+        );
 
-            std::string column_name = name;
+        for (const auto& name :
+             op.group_by) {
 
-            const size_t dot =
-                column_name.find('.');
+            int ordinal =
+                findColumnOrdinal(
+                    *schema,
+                    name
+                );
 
-            if (dot != std::string::npos) {
-                column_name =
-                    column_name.substr(dot + 1);
-            }
-
-            bool found = false;
-
-            for (const auto& column : schema->columns) {
-                if (column.name == column_name) {
-
-                    group_by_cols.push_back(
-                        static_cast<size_t>(
-                            column.ordinal
-                        )
-                    );
-
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            if (ordinal < 0) {
                 throw std::runtime_error(
                     "ExecutorAdapter: GROUP BY column '" +
                     name +
                     "' not found"
                 );
             }
+
+            group_by_cols.push_back(
+                static_cast<size_t>(
+                    ordinal
+                )
+            );
         }
 
 
@@ -469,24 +503,29 @@ private:
         // --------------------------------------------------------------------
 
         std::vector<::AggCall> agg_calls;
-        agg_calls.reserve(op.aggregates.size());
 
-        for (const auto& aggregate : op.aggregates) {
+        agg_calls.reserve(
+            op.aggregates.size()
+        );
 
+        for (const auto& aggregate :
+             op.aggregates) {
+
+            // ---------------------------------------------------------------
             // COUNT(*)
+            // ---------------------------------------------------------------
+
             if (aggregate.is_star) {
 
-                if (aggregate.func != AggFunc::COUNT) {
+                if (aggregate.func !=
+                    AggFunc::COUNT) {
+
                     throw std::runtime_error(
-                        "ExecutorAdapter: '*' is only valid for COUNT"
+                        "ExecutorAdapter: '*' is only "
+                        "valid for COUNT"
                     );
                 }
 
-                /*
-                 * Runtime COUNT is row-count based, so the actual
-                 * source column is irrelevant. Runtime aggregate currently
-                 * expects a column index, therefore column 0 is used.
-                 */
                 agg_calls.push_back(
                     ::AggCall{
                         RuntimeAggFunc::Count,
@@ -499,12 +538,13 @@ private:
 
 
             // ---------------------------------------------------------------
-            // Non-star aggregates must have a column argument
+            // Aggregate argument
             // ---------------------------------------------------------------
 
             if (!aggregate.arg) {
                 throw std::runtime_error(
-                    "ExecutorAdapter: aggregate argument is missing"
+                    "ExecutorAdapter: aggregate "
+                    "argument is missing"
                 );
             }
 
@@ -521,74 +561,65 @@ private:
             }
 
 
-            std::string column_name =
-                arg->column;
-
-            bool found = false;
-
-            for (const auto& column : schema->columns) {
-
-                if (column.name != column_name) {
-                    continue;
-                }
-
-                RuntimeAggFunc runtime_func;
-
-                switch (aggregate.func) {
-
-                    case AggFunc::COUNT:
-                        runtime_func =
-                            RuntimeAggFunc::Count;
-                        break;
-
-                    case AggFunc::SUM:
-                        runtime_func =
-                            RuntimeAggFunc::Sum;
-                        break;
-
-                    case AggFunc::AVG:
-                        runtime_func =
-                            RuntimeAggFunc::Avg;
-                        break;
-
-                    case AggFunc::MIN:
-                        runtime_func =
-                            RuntimeAggFunc::Min;
-                        break;
-
-                    case AggFunc::MAX:
-                        runtime_func =
-                            RuntimeAggFunc::Max;
-                        break;
-                }
-
-                agg_calls.push_back(
-                    ::AggCall{
-                        runtime_func,
-                        static_cast<size_t>(
-                            column.ordinal
-                        )
-                    }
+            int ordinal =
+                findColumnOrdinal(
+                    *schema,
+                    arg->table.has_value()
+                        ? *arg->table +
+                          "." +
+                          arg->column
+                        : arg->column
                 );
 
-                found = true;
-                break;
-            }
-
-
-            if (!found) {
+            if (ordinal < 0) {
                 throw std::runtime_error(
                     "ExecutorAdapter: aggregate column '" +
                     arg->column +
                     "' not found"
                 );
             }
+
+
+            RuntimeAggFunc runtime_func;
+
+            switch (aggregate.func) {
+
+                case AggFunc::COUNT:
+                    runtime_func =
+                        RuntimeAggFunc::Count;
+                    break;
+
+                case AggFunc::SUM:
+                    runtime_func =
+                        RuntimeAggFunc::Sum;
+                    break;
+
+                case AggFunc::AVG:
+                    runtime_func =
+                        RuntimeAggFunc::Avg;
+                    break;
+
+                case AggFunc::MIN:
+                    runtime_func =
+                        RuntimeAggFunc::Min;
+                    break;
+
+                case AggFunc::MAX:
+                    runtime_func =
+                        RuntimeAggFunc::Max;
+                    break;
+            }
+
+            agg_calls.push_back(
+                ::AggCall{
+                    runtime_func,
+                    static_cast<size_t>(
+                        ordinal
+                    )
+                }
+            );
         }
 
-
-        // --------------------------------------------------------------------
-        // Create runtime Aggregate operator
-        // --------------------------------------------------------------------
 
         return std::make_unique<Aggregate>(
             std::move(child),
@@ -605,60 +636,51 @@ private:
     OperatorPtr buildNode(
         const NestedLoopJoinOp& op
     ) {
-
         OperatorPtr left =
             build(*op.left);
 
         OperatorPtr right =
             build(*op.right);
 
-
-        const TableSchema* left_schema =
+       
+        auto left_schema =
             schemaForNode(*op.left);
 
-        const TableSchema* right_schema =
+        auto right_schema =
             schemaForNode(*op.right);
 
-        if (!left_schema || !right_schema) {
+        if (!left_schema ||
+            !right_schema) {
+
             throw std::runtime_error(
-                "ExecutorAdapter: cannot determine JOIN child schemas"
+                "ExecutorAdapter: cannot determine "
+                "JOIN child schemas"
             );
         }
 
-
-        const std::string left_alias =
-            nodeAlias(*op.left);
-
-        const std::string right_alias =
-            nodeAlias(*op.right);
-
-
-        auto combined =
+        auto join_schema =
             std::make_shared<TableSchema>(
-                makeCombinedSchema(
+                combineSchemas(
                     *left_schema,
-                    left_alias,
-                    *right_schema,
-                    right_alias
+                    *right_schema
                 )
             );
-
 
         auto condition =
             std::make_shared<Expr>(
                 cloneExpr(op.condition)
             );
 
-
         return std::make_unique<NestedLoopJoin>(
             std::move(left),
             std::move(right),
-            [condition, combined](const Row& row) {
-
+            [condition, join_schema](
+                const Row& row
+            ) {
                 return evalBool(
                     *condition,
                     row,
-                    *combined
+                    *join_schema
                 );
             }
         );
@@ -670,7 +692,9 @@ private:
     // ========================================================================
 
     template <typename T>
-    OperatorPtr buildNode(const T&) {
+    OperatorPtr buildNode(
+        const T&
+    ) {
         throw std::runtime_error(
             "ExecutorAdapter: operator not implemented yet"
         );
@@ -678,86 +702,448 @@ private:
 
 
     // ========================================================================
-    // Find schema represented by a planner node
+    // Schema resolver
+    //
+    // Every returned schema describes the ACTUAL row layout emitted by that
+    // operator.
     // ========================================================================
 
-    const TableSchema* schemaForNode(
+    std::shared_ptr<TableSchema> schemaForNode(
         const OperatorNode& node
     ) const {
 
         return std::visit(
-            [this](const auto& op) -> const TableSchema* {
+            [this](const auto& op)
+                -> std::shared_ptr<TableSchema> {
 
                 using T =
                     std::decay_t<decltype(op)>;
 
 
+                // ------------------------------------------------------------
+                // SeqScan
+                // ------------------------------------------------------------
+
                 if constexpr (
-                    std::is_same_v<T, SeqScanOp>
+                    std::is_same_v<
+                        T,
+                        SeqScanOp
+                    >
                 ) {
 
-                    return catalog_.get_table(
-                        op.table_name
-                    );
+                    const TableSchema* base =
+                        catalog_.get_table(
+                            op.table_name
+                        );
+
+                    if (!base) {
+                        return nullptr;
+                    }
+
+                    auto result =
+                        std::make_shared<TableSchema>(
+                            *base
+                        );
+
+                    result->root_page_id = -1;
+
+                    const std::string alias =
+                        op.alias.empty()
+                            ? op.table_name
+                            : op.alias;
+
+                    for (
+                        auto& column :
+                        result->columns
+                    ) {
+
+                        column.name =
+                            alias +
+                            "." +
+                            column.name;
+                    }
+
+                    return result;
+                }
 
 
-                } else if constexpr (
-                    std::is_same_v<T, IndexScanOp>
+                // ------------------------------------------------------------
+                // IndexScan
+                // ------------------------------------------------------------
+
+                else if constexpr (
+                    std::is_same_v<
+                        T,
+                        IndexScanOp
+                    >
                 ) {
 
-                    return catalog_.get_table(
-                        op.table_name
-                    );
+                    const TableSchema* base =
+                        catalog_.get_table(
+                            op.table_name
+                        );
+
+                    if (!base) {
+                        return nullptr;
+                    }
+
+                    auto result =
+                        std::make_shared<TableSchema>(
+                            *base
+                        );
+
+                    result->root_page_id = -1;
+
+                    const std::string alias =
+                        op.alias.empty()
+                            ? op.table_name
+                            : op.alias;
+
+                    for (
+                        auto& column :
+                        result->columns
+                    ) {
+
+                        column.name =
+                            alias +
+                            "." +
+                            column.name;
+                    }
+
+                    return result;
+                }
 
 
-                } else if constexpr (
-                    std::is_same_v<T, FilterOp>
+                // ------------------------------------------------------------
+                // Filter
+                // ------------------------------------------------------------
+
+                else if constexpr (
+                    std::is_same_v<
+                        T,
+                        FilterOp
+                    >
                 ) {
 
                     return schemaForNode(
                         *op.child
                     );
+                }
 
 
-                } else if constexpr (
-                    std::is_same_v<T, SortOp>
+                // ------------------------------------------------------------
+                // Sort
+                // ------------------------------------------------------------
+
+                else if constexpr (
+                    std::is_same_v<
+                        T,
+                        SortOp
+                    >
                 ) {
 
                     return schemaForNode(
                         *op.child
                     );
+                }
 
 
-                } else if constexpr (
-                    std::is_same_v<T, ProjectOp>
+                // ------------------------------------------------------------
+                // Project
+                // ------------------------------------------------------------
+
+                else if constexpr (
+                    std::is_same_v<
+                        T,
+                        ProjectOp
+                    >
                 ) {
 
-                    return schemaForNode(
-                        *op.child
-                    );
+                    auto child =
+                        schemaForNode(
+                            *op.child
+                        );
+
+                    if (!child) {
+                        return nullptr;
+                    }
+
+                    auto result =
+                        std::make_shared<TableSchema>();
+
+                    result->name =
+                        child->name +
+                        "_PROJECT";
+
+                    result->primary_key.clear();
+                    result->root_page_id = -1;
 
 
-                } else if constexpr (
-                    std::is_same_v<T, AggregateOp>
+                    if (op.columns.size() == 1 &&
+                        op.columns[0] == "*") {
+
+                        for (
+                            size_t i = 0;
+                            i < child->columns.size();
+                            ++i
+                        ) {
+
+                            ColumnInfo column =
+                                child->columns[i];
+
+                            column.ordinal =
+                                static_cast<int>(i);
+
+                            result->columns.push_back(
+                                std::move(column)
+                            );
+                        }
+
+                        return result;
+                    }
+
+
+                    for (
+                        const auto& requested :
+                        op.columns
+                    ) {
+
+                        int ordinal =
+                            findColumnOrdinal(
+                                *child,
+                                requested
+                            );
+
+                        if (ordinal < 0) {
+                            return nullptr;
+                        }
+
+                        ColumnInfo column =
+                            child->columns[
+                                static_cast<size_t>(
+                                    ordinal
+                                )
+                            ];
+
+                        column.ordinal =
+                            static_cast<int>(
+                                result->columns.size()
+                            );
+
+                        result->columns.push_back(
+                            std::move(column)
+                        );
+                    }
+
+                    return result;
+                }
+
+
+                // ------------------------------------------------------------
+                // NestedLoopJoin
+                // ------------------------------------------------------------
+
+                else if constexpr (
+                    std::is_same_v<
+                        T,
+                        NestedLoopJoinOp
+                    >
                 ) {
 
-                    /*
-                     * For now the runtime Aggregate consumes the child's
-                     * schema. A full output-schema layer will be added
-                     * later so expressions after aggregation can resolve
-                     * aggregate output columns correctly.
-                     */
-                    return schemaForNode(
-                        *op.child
+                    auto left =
+                        schemaForNode(
+                            *op.left
+                        );
+
+                    auto right =
+                        schemaForNode(
+                            *op.right
+                        );
+
+                    if (!left ||
+                        !right) {
+
+                        return nullptr;
+                    }
+
+                    return std::make_shared<TableSchema>(
+                        combineSchemas(
+                            *left,
+                            *right
+                        )
                     );
+                }
 
 
-                } else {
+                // ------------------------------------------------------------
+                // Aggregate
+                // ------------------------------------------------------------
 
-                    /*
-                     * JOIN currently builds its own combined schema in
-                     * buildNode(NestedLoopJoinOp).
-                     */
+                else if constexpr (
+                    std::is_same_v<
+                        T,
+                        AggregateOp
+                    >
+                ) {
+
+                    auto child =
+                        schemaForNode(
+                            *op.child
+                        );
+
+                    if (!child) {
+                        return nullptr;
+                    }
+
+                    auto result =
+                        std::make_shared<TableSchema>();
+
+                    result->name =
+                        child->name +
+                        "_AGGREGATE";
+
+                    result->primary_key.clear();
+                    result->root_page_id = -1;
+
+
+                    int ordinal = 0;
+
+
+                    // GROUP BY output columns
+                    for (
+                        const auto& group_name :
+                        op.group_by
+                    ) {
+
+                        int source_ordinal =
+                            findColumnOrdinal(
+                                *child,
+                                group_name
+                            );
+
+                        if (source_ordinal < 0) {
+                            return nullptr;
+                        }
+
+                        ColumnInfo column =
+                            child->columns[
+                                static_cast<size_t>(
+                                    source_ordinal
+                                )
+                            ];
+
+                        column.ordinal =
+                            ordinal++;
+
+                        result->columns.push_back(
+                            std::move(column)
+                        );
+                    }
+
+
+                    // Aggregate output columns
+                    for (
+                        const auto& aggregate :
+                        op.aggregates
+                    ) {
+
+                        ColumnInfo column;
+
+                        column.ordinal =
+                            ordinal++;
+
+                        column.is_not_null = false;
+
+
+                        if (aggregate.is_star) {
+
+                            column.name =
+                                "COUNT(*)";
+
+                            column.type =
+                                DataType::INTEGER;
+
+                        } else {
+
+                            if (!aggregate.arg) {
+                                return nullptr;
+                            }
+
+                            const auto* arg =
+                                std::get_if<ColumnRef>(
+                                    &aggregate.arg->node
+                                );
+
+                            if (!arg) {
+                                return nullptr;
+                            }
+
+                            std::string arg_name =
+                                arg->table.has_value()
+                                    ? *arg->table +
+                                      "." +
+                                      arg->column
+                                    : arg->column;
+
+                            switch (aggregate.func) {
+
+                                case AggFunc::COUNT:
+                                    column.name =
+                                        "COUNT(" +
+                                        arg_name +
+                                        ")";
+                                    column.type =
+                                        DataType::INTEGER;
+                                    break;
+
+                                case AggFunc::SUM:
+                                    column.name =
+                                        "SUM(" +
+                                        arg_name +
+                                        ")";
+                                    column.type =
+                                        DataType::REAL;
+                                    break;
+
+                                case AggFunc::AVG:
+                                    column.name =
+                                        "AVG(" +
+                                        arg_name +
+                                        ")";
+                                    column.type =
+                                        DataType::REAL;
+                                    break;
+
+                                case AggFunc::MIN:
+                                    column.name =
+                                        "MIN(" +
+                                        arg_name +
+                                        ")";
+                                    column.type =
+                                        DataType::REAL;
+                                    break;
+
+                                case AggFunc::MAX:
+                                    column.name =
+                                        "MAX(" +
+                                        arg_name +
+                                        ")";
+                                    column.type =
+                                        DataType::REAL;
+                                    break;
+                            }
+                        }
+
+                        result->columns.push_back(
+                            std::move(column)
+                        );
+                    }
+
+                    return result;
+                }
+
+
+                else {
                     return nullptr;
                 }
             },
@@ -767,104 +1153,125 @@ private:
 
 
     // ========================================================================
-    // Determine query-visible alias of a node
+    // Find a column ordinal.
+    //
+    // Supports:
+    //   id
+    //   users.id
+    //   u.id
+    //
+    // Qualified names are preferred when available.
     // ========================================================================
 
-    std::string nodeAlias(
-        const OperatorNode& node
-    ) const {
+    static int findColumnOrdinal(
+        const TableSchema& schema,
+        const std::string& requested
+    ) {
 
-        return std::visit(
-            [this](const auto& op) -> std::string {
+        // ------------------------------------------------------------
+        // Exact match first
+        // ------------------------------------------------------------
 
-                using T =
-                    std::decay_t<decltype(op)>;
+        for (
+            const auto& column :
+            schema.columns
+        ) {
 
+            if (column.name ==
+                requested) {
 
-                if constexpr (
-                    std::is_same_v<T, SeqScanOp>
-                ) {
-
-                    return op.alias.empty()
-                        ? op.table_name
-                        : op.alias;
-
-
-                } else if constexpr (
-                    std::is_same_v<T, IndexScanOp>
-                ) {
-
-                    return op.alias.empty()
-                        ? op.table_name
-                        : op.alias;
+                return column.ordinal;
+            }
+        }
 
 
-                } else if constexpr (
-                    std::is_same_v<T, FilterOp>
-                ) {
+        // ------------------------------------------------------------
+        // Bare-name lookup
+        // ------------------------------------------------------------
 
-                    return nodeAlias(
-                        *op.child
+        std::string requested_bare =
+            requested;
+
+        const size_t requested_dot =
+            requested_bare.find('.');
+
+        if (requested_dot !=
+            std::string::npos) {
+
+            requested_bare =
+                requested_bare.substr(
+                    requested_dot + 1
+                );
+        }
+
+
+        int found =
+            -1;
+
+
+        for (
+            const auto& column :
+            schema.columns
+        ) {
+
+            std::string bare =
+                column.name;
+
+            const size_t dot =
+                bare.find('.');
+
+            if (dot !=
+                std::string::npos) {
+
+                bare =
+                    bare.substr(
+                        dot + 1
                     );
+            }
+
+            if (bare !=
+                requested_bare) {
+
+                continue;
+            }
+
+            // Ambiguous bare column.
+            if (found >= 0) {
+                return -1;
+            }
+
+            found =
+                column.ordinal;
+        }
 
 
-                } else if constexpr (
-                    std::is_same_v<T, SortOp>
-                ) {
-
-                    return nodeAlias(
-                        *op.child
-                    );
-
-
-                } else if constexpr (
-                    std::is_same_v<T, ProjectOp>
-                ) {
-
-                    return nodeAlias(
-                        *op.child
-                    );
-
-
-                } else {
-
-                    throw std::runtime_error(
-                        "ExecutorAdapter: cannot determine node alias"
-                    );
-                }
-            },
-            node.v
-        );
+        return found;
     }
 
 
     // ========================================================================
-    // Build temporary schema for:
+    // Combine two already-resolved schemas.
     //
-    //     [left row columns] + [right row columns]
+    // Child schemas already contain query-visible names such as:
     //
-    // Qualified names are used so expression evaluation can distinguish
-    // duplicate column names:
+    //   users.id
+    //   users.name
+    //   orders.id
     //
-    //     users.id
-    //     users.name
-    //     orders.id
-    //     orders.user_id
+    // Therefore we simply concatenate them.
     // ========================================================================
 
-    static TableSchema makeCombinedSchema(
+    static TableSchema combineSchemas(
         const TableSchema& left,
-        const std::string& left_alias,
-        const TableSchema& right,
-        const std::string& right_alias
+        const TableSchema& right
     ) {
 
         TableSchema result;
 
         result.name =
-            left_alias +
+            left.name +
             "_JOIN_" +
-            right_alias;
+            right.name;
 
         result.primary_key.clear();
         result.root_page_id = -1;
@@ -873,19 +1280,13 @@ private:
         int ordinal = 0;
 
 
-        // --------------------------------------------------------------------
-        // Left table
-        // --------------------------------------------------------------------
-
-        for (const auto& column : left.columns) {
+        for (
+            const auto& column :
+            left.columns
+        ) {
 
             ColumnInfo copy =
                 column;
-
-            copy.name =
-                left_alias +
-                "." +
-                column.name;
 
             copy.ordinal =
                 ordinal++;
@@ -896,19 +1297,13 @@ private:
         }
 
 
-        // --------------------------------------------------------------------
-        // Right table
-        // --------------------------------------------------------------------
-
-        for (const auto& column : right.columns) {
+        for (
+            const auto& column :
+            right.columns
+        ) {
 
             ColumnInfo copy =
                 column;
-
-            copy.name =
-                right_alias +
-                "." +
-                column.name;
 
             copy.ordinal =
                 ordinal++;
