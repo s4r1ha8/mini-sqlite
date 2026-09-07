@@ -61,22 +61,90 @@ Value eval(const Expr& expr, const Row& row, const TableSchema& schema) {
 
         // ── ColumnRef ────────────────────────────────────────────────────────
         if constexpr (std::is_same_v<T, ColumnRef>) {
-            // Find the column in the schema by name.
-            // For qualified refs (table.col) we ignore the table qualifier here
-            // — semantic analysis has already verified it's correct.
-            for (const auto& col : schema.columns) {
-                if (col.name == node.column) {
-                    if (col.ordinal < 0 || col.ordinal >= static_cast<int>(row.size())) {
-                        throw EvalError(
-                            "Row does not have value at ordinal " +
-                            std::to_string(col.ordinal) +
-                            " for column '" + node.column + "'.");
+            // Qualified reference: table.column
+            //
+            // For combined JOIN schemas, the execution layer may store
+            // column names as "table.column" while preserving the original
+            // ordinal. This lets runtime evaluation honor the qualifier.
+            if (node.table.has_value()) {
+                const std::string qualified =
+                    *node.table + "." + node.column;
+
+                for (const auto& col : schema.columns) {
+                    if (col.name == qualified) {
+                        if (col.ordinal < 0 ||
+                            col.ordinal >= static_cast<int>(row.size())) {
+                            throw EvalError(
+                                "Row does not have value at ordinal " +
+                                std::to_string(col.ordinal) +
+                                " for column '" + qualified + "'.");
+                        }
+                        return row[col.ordinal];
                     }
-                    return row[col.ordinal];
+                }
+
+                // Also allow a schema whose column name is the original
+                // unqualified name when there is only one such match.
+                // This preserves existing single-table behavior.
+                const TableSchema* single_table_schema = &schema;
+                if (single_table_schema->columns.size() > 0 &&
+                    schema.name == *node.table) {
+                    for (const auto& col : schema.columns) {
+                        if (col.name == node.column) {
+                            if (col.ordinal < 0 ||
+                                col.ordinal >= static_cast<int>(row.size())) {
+                                throw EvalError(
+                                    "Row does not have value at ordinal " +
+                                    std::to_string(col.ordinal) +
+                                    " for column '" + node.column + "'.");
+                            }
+                            return row[col.ordinal];
+                        }
+                    }
+                }
+
+                throw EvalError(
+                    "Column '" + qualified +
+                    "' not found in schema '" + schema.name + "'.");
+            }
+
+            // Unqualified reference.
+            // Find exactly one matching bare column name.
+            const ColumnInfo* match = nullptr;
+
+            for (const auto& col : schema.columns) {
+                std::string bare_name = col.name;
+
+                const size_t dot = bare_name.find('.');
+                if (dot != std::string::npos)
+                    bare_name = bare_name.substr(dot + 1);
+
+                if (bare_name == node.column) {
+                    if (match != nullptr) {
+                        throw EvalError(
+                            "Column '" + node.column +
+                            "' is ambiguous in schema '" +
+                            schema.name + "'.");
+                    }
+                    match = &col;
                 }
             }
-            throw EvalError("Column '" + node.column +
-                            "' not found in schema '" + schema.name + "'.");
+
+            if (!match) {
+                throw EvalError(
+                    "Column '" + node.column +
+                    "' not found in schema '" + schema.name + "'.");
+            }
+
+            if (match->ordinal < 0 ||
+                match->ordinal >= static_cast<int>(row.size())) {
+                throw EvalError(
+                    "Row does not have value at ordinal " +
+                    std::to_string(match->ordinal) +
+                    " for column '" + node.column + "'.");
+            }
+
+            return row[match->ordinal];
         }
 
         // ── BinaryOp ─────────────────────────────────────────────────────────
