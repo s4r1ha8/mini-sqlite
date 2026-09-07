@@ -4,6 +4,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <variant>
 #include <utility>
 #include "common/cursor_interface.h"
@@ -14,6 +15,47 @@
 #include "exec/seq_scan.h"
 #include "exec/filter.h"
 #include "exec/sort.h"
+
+class Project : public Operator {
+public:
+    Project(OperatorPtr child, std::vector<size_t> columns)
+        : child_(std::move(child)),
+          columns_(std::move(columns)) {}
+
+    void open() override {
+        child_->open();
+    }
+
+    std::optional<Row> next() override {
+        auto row = child_->next();
+
+        if (!row.has_value())
+            return std::nullopt;
+
+        Row result;
+        result.reserve(columns_.size());
+
+        for (size_t index : columns_) {
+            if (index >= row->size()) {
+                throw std::runtime_error(
+                    "Project: column index out of range");
+            }
+
+            result.push_back((*row)[index]);
+        }
+
+        return result;
+    }
+
+    void close() override {
+        child_->close();
+    }
+
+private:
+    OperatorPtr child_;
+    std::vector<size_t> columns_;
+};
+
 class ExecutorAdapter {
 public:
     ExecutorAdapter(Pager& pager, Catalog& catalog)
@@ -31,6 +73,61 @@ public:
 private:
     Pager& pager_;
     Catalog& catalog_;
+
+OperatorPtr buildNode(const ProjectOp& op) {
+    OperatorPtr child = build(*op.child);
+
+    const TableSchema* schema = schemaForNode(*op.child);
+
+    if (!schema) {
+        throw std::runtime_error(
+            "ExecutorAdapter: cannot determine schema for Project");
+    }
+
+    std::vector<size_t> columns;
+
+    if (op.columns.size() == 1 && op.columns[0] == "*") {
+        columns.reserve(schema->columns.size());
+
+        for (const auto& column : schema->columns) {
+            columns.push_back(
+                static_cast<size_t>(column.ordinal));
+        }
+    } else {
+        columns.reserve(op.columns.size());
+
+        for (const auto& requested : op.columns) {
+            std::string column_name = requested;
+
+            const size_t dot = column_name.find('.');
+            if (dot != std::string::npos) {
+                column_name = column_name.substr(dot + 1);
+            }
+
+            bool found = false;
+
+            for (const auto& column : schema->columns) {
+                if (column.name == column_name) {
+                    columns.push_back(
+                        static_cast<size_t>(column.ordinal));
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                throw std::runtime_error(
+                    "ExecutorAdapter: SELECT column '" +
+                    requested + "' not found");
+            }
+        }
+    }
+
+    return std::make_unique<Project>(
+        std::move(child),
+        std::move(columns)
+    );
+}
 
 OperatorPtr buildNode(const IndexScanOp& op) {
     const TableSchema* schema = catalog_.get_table(op.table_name);
@@ -215,7 +312,7 @@ OperatorPtr buildNode(const SortOp& op) {
                 } else {
                     return nullptr;
                 }
-            }
+            },
             node.v
         );
     }
