@@ -56,7 +56,7 @@ Value eval(const Expr& expr, const Row& row, const TableSchema& schema) {
 
         // ── Literal ──────────────────────────────────────────────────────────
         if constexpr (std::is_same_v<T, Literal>) {
-            return node.value;
+            return std::visit([](const auto& v) -> Value { return Value(v); }, node.value);
         }
 
         // ── ColumnRef ────────────────────────────────────────────────────────
