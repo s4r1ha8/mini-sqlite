@@ -5,10 +5,10 @@
 #include <vector>
 #include <cmath>
 
-enum class AggFunc { Count, Sum, Avg, Min, Max };
+enum class RuntimeAggFunc { Count, Sum, Avg, Min, Max };
 
 struct AggCall {
-    AggFunc func;
+    RuntimeAggFunc func;
     size_t  col;
 };
 
@@ -54,7 +54,7 @@ public:
             for (size_t i = 0; i < agg_calls_.size(); i++) {
                 const auto& call = agg_calls_[i];
                 g.counts[i]++;
-                if (call.func == AggFunc::Count) continue;
+                if (call.func == RuntimeAggFunc::Count) continue;
                 Value val = (*row)[call.col];
                 double num = to_double(val);
                 g.sums[i] += num;
@@ -70,11 +70,11 @@ public:
             for (size_t col : group_by_cols_) result.push_back(sample[col]);
             for (size_t i = 0; i < agg_calls_.size(); i++) {
                 switch (agg_calls_[i].func) {
-                    case AggFunc::Count: result.push_back(Value(g.counts[i])); break;
-                    case AggFunc::Sum:   result.push_back(Value(g.sums[i]));   break;
-                    case AggFunc::Avg:   result.push_back(Value(g.counts[i] > 0 ? g.sums[i]/g.counts[i] : 0.0)); break;
-                    case AggFunc::Min:   result.push_back(g.mins[i]); break;
-                    case AggFunc::Max:   result.push_back(g.maxs[i]); break;
+                    case RuntimeAggFunc::Count: result.push_back(Value(g.counts[i])); break;
+                    case RuntimeAggFunc::Sum:   result.push_back(Value(g.sums[i]));   break;
+                    case RuntimeAggFunc::Avg:   result.push_back(Value(g.counts[i] > 0 ? g.sums[i]/g.counts[i] : 0.0)); break;
+                    case RuntimeAggFunc::Min:   result.push_back(g.mins[i]); break;
+                    case RuntimeAggFunc::Max:   result.push_back(g.maxs[i]); break;
                 }
             }
             results_.push_back(std::move(result));

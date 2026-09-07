@@ -18,8 +18,7 @@
 
 #include <stdexcept>
 #include <string>
-#include <variant>
-#include <vector>
+#include "common/row.h"
 #include "common/ast.h"
 #include "frontend/catalog.h"
 
@@ -28,8 +27,7 @@
 // Using LiteralValue (already defined in ast.h) as our Value type:
 //   std::variant<std::monostate, int64_t, double, std::string>
 //   monostate = NULL
-using Value = LiteralValue;
-using Row   = std::vector<Value>;
+// Value and Row are defined by the shared common/row.h contract.
 
 // ── EvalError — thrown when evaluation hits a type error or missing column ────
 class EvalError : public std::runtime_error {
