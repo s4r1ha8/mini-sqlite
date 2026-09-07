@@ -1,5 +1,6 @@
 #pragma once
 
+#include "exec/index_scan.h"
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,75 @@ public:
 private:
     Pager& pager_;
     Catalog& catalog_;
+
+OperatorPtr buildNode(const IndexScanOp& op) {
+    const TableSchema* schema = catalog_.get_table(op.table_name);
+
+    if (!schema) {
+        throw std::runtime_error(
+            "ExecutorAdapter: table '" + op.table_name +
+            "' does not exist");
+    }
+
+    if (schema->root_page_id < 0) {
+        throw std::runtime_error(
+            "ExecutorAdapter: table '" + op.table_name +
+            "' has no root page");
+    }
+
+    const IndexInfo* index = nullptr;
+
+    for (const auto& candidate : schema->indexes) {
+        if (candidate.name == op.index_name) {
+            index = &candidate;
+            break;
+        }
+    }
+
+    if (!index) {
+        throw std::runtime_error(
+            "ExecutorAdapter: index '" + op.index_name +
+            "' not found on table '" + op.table_name + "'");
+    }
+
+    if (index->root_page_id < 0) {
+        throw std::runtime_error(
+            "ExecutorAdapter: index '" + op.index_name +
+            "' has no root page");
+    }
+
+    const auto* binary = std::get_if<BinaryOp>(&op.key_condition.node);
+
+    if (!binary || binary->op != "=") {
+        throw std::runtime_error(
+            "ExecutorAdapter: IndexScan requires equality predicate");
+    }
+
+    const Literal* literal = std::get_if<Literal>(&binary->left->node);
+    if (!literal) {
+        literal = std::get_if<Literal>(&binary->right->node);
+    }
+
+    if (!literal) {
+        throw std::runtime_error(
+            "ExecutorAdapter: IndexScan key condition must contain a literal");
+    }
+
+    Value lookup_value = std::visit(
+        [](const auto& value) -> Value {
+            return Value(value);
+        },
+        literal->value
+    );
+
+    return std::make_unique<IndexScan>(
+        pager_,
+        static_cast<PageId>(schema->root_page_id),
+        static_cast<PageId>(index->root_page_id),
+        schema->columns.size(),
+        std::move(lookup_value)
+    );
+}
 
     OperatorPtr buildNode(const SeqScanOp& op) {
         const TableSchema* schema = catalog_.get_table(op.table_name);
@@ -145,7 +215,7 @@ OperatorPtr buildNode(const SortOp& op) {
                 } else {
                     return nullptr;
                 }
-            },
+            }
             node.v
         );
     }
