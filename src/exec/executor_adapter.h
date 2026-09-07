@@ -12,7 +12,7 @@
 #include "storage/pager.h"
 #include "exec/seq_scan.h"
 #include "exec/filter.h"
-
+#include "exec/sort.h"
 class ExecutorAdapter {
 public:
     ExecutorAdapter(Pager& pager, Catalog& catalog)
@@ -74,6 +74,56 @@ private:
         [predicate, schema_copy](const Row& row) {
             return evalBool(*predicate, row, *schema_copy);
         }
+    );
+}
+
+OperatorPtr buildNode(const SortOp& op) {
+    OperatorPtr child = build(*op.child);
+
+    const TableSchema* schema = schemaForNode(*op.child);
+
+    if (!schema) {
+        throw std::runtime_error(
+            "ExecutorAdapter: cannot determine schema for Sort");
+    }
+
+    std::vector<SortKey> keys;
+    keys.reserve(op.order_by.size());
+
+    for (const auto& item : op.order_by) {
+        std::string column_name = item.column;
+
+        // ORDER BY currently stores a name or qualified name.
+        const size_t dot = column_name.find('.');
+        if (dot != std::string::npos) {
+            column_name = column_name.substr(dot + 1);
+        }
+
+        bool found = false;
+
+        for (const auto& column : schema->columns) {
+            if (column.name == column_name) {
+                keys.push_back(
+                    SortKey{
+                        static_cast<size_t>(column.ordinal),
+                        !item.ascending
+                    }
+                );
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            throw std::runtime_error(
+                "ExecutorAdapter: ORDER BY column '" +
+                item.column + "' not found");
+        }
+    }
+
+    return std::make_unique<Sort>(
+        std::move(child),
+        std::move(keys)
     );
 }
 
