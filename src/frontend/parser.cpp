@@ -207,24 +207,72 @@ InsertStmt Parser::parseInsert() {
 SelectStmt Parser::parseSelect() {
     SelectStmt stmt;
 
-    // ── select_list: * | column_ref ("," column_ref)* ────────────────────────
+        // ── select_list ──────────────────────────────────────────────────────────
+    // Supports:
+    //   *
+    //   column
+    //   table.column
+    //   COUNT(*)
+    //   COUNT(column)
+    //   SUM(column)
+    //   AVG(column)
+    //   MIN(column)
+    //   MAX(column)
     if (match(TokenType::STAR)) {
         stmt.columns.push_back("*");
     } else {
-        // Column name, possibly qualified as table.column
-        auto readColName = [&]() -> std::string {
-            std::string name = expect(TokenType::IDENTIFIER,
-                                      "in SELECT column list").lexeme;
-            if (match(TokenType::DOT)) {
-                std::string col = expect(TokenType::IDENTIFIER,
-                                         "after '.' in qualified column name").lexeme;
-                name = name + "." + col;
+
+        auto parseSelectItem = [&]() {
+
+            Expr item = parseColumnRefOrAggregate();
+
+            if (const auto* aggregate =
+                    std::get_if<AggregateCall>(&item.node)) {
+
+                // Keep the aggregate AST separately so the planner can
+                // populate AggregateOp::aggregates.
+                stmt.aggregate_columns.push_back(
+                    AggregateCall{
+                        aggregate->func,
+                        aggregate->is_star,
+                        aggregate->is_star
+                            ? nullptr
+                            : std::make_unique<Expr>(
+                                  cloneExpr(*aggregate->arg))
+                    }
+                );
+
+                // Preserve the textual SELECT item for the ProjectOp.
+                //
+                // The final aggregate output-schema/projection handling
+                // will be integrated separately.
+                stmt.columns.push_back(
+                    aggregate->is_star
+                        ? aggFuncToString(aggregate->func) + "(*)"
+                        : aggFuncToString(aggregate->func) + "(...)"
+                );
+
+            } else if (const auto* column =
+                           std::get_if<ColumnRef>(&item.node)) {
+
+                stmt.columns.push_back(
+                    column->table.has_value()
+                        ? *column->table + "." + column->column
+                        : column->column
+                );
+
+            } else {
+                throw ParseError(
+                    "Invalid expression in SELECT list at line " +
+                    std::to_string(peek().line)
+                );
             }
-            return name;
         };
-        stmt.columns.push_back(readColName());
+
+        parseSelectItem();
+
         while (match(TokenType::COMMA)) {
-            stmt.columns.push_back(readColName());
+            parseSelectItem();
         }
     }
 

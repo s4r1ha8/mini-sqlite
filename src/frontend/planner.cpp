@@ -24,16 +24,58 @@ std::unique_ptr<OperatorNode> Planner::plan(const SelectStmt& stmt) {
             FilterOp{ std::move(root), cloneExpr(*stmt.where) });
     }
 
-    // 3. Wrap with Aggregate if GROUP BY is present
-    if (stmt.group_by.has_value()) {
-        std::vector<AggregateCall> aggs;
-        std::optional<Expr> having;
-        if (stmt.having.has_value()) having = cloneExpr(*stmt.having);
-        root = std::make_unique<OperatorNode>(
-            AggregateOp{ std::move(root), *stmt.group_by,
-                         std::move(aggs), std::move(having) });
-    }
+     // 3. Wrap with Aggregate if GROUP BY is present or the SELECT list
+    // contains aggregate expressions.
+    if (stmt.group_by.has_value() ||
+        !stmt.aggregate_columns.empty()) {
 
+        std::vector<AggregateCall> aggs;
+        aggs.reserve(stmt.aggregate_columns.size());
+
+        for (const auto& aggregate : stmt.aggregate_columns) {
+            if (aggregate.is_star) {
+                aggs.push_back(
+                    AggregateCall{
+                        aggregate.func,
+                        true,
+                        nullptr
+                    }
+                );
+            } else {
+                aggs.push_back(
+                    AggregateCall{
+                        aggregate.func,
+                        false,
+                        aggregate.arg
+                            ? std::make_unique<Expr>(
+                                  cloneExpr(*aggregate.arg))
+                            : nullptr
+                    }
+                );
+            }
+        }
+
+        std::optional<Expr> having;
+
+        if (stmt.having.has_value()) {
+            having = cloneExpr(*stmt.having);
+        }
+
+        std::vector<std::string> group_by;
+
+        if (stmt.group_by.has_value()) {
+            group_by = *stmt.group_by;
+        }
+
+        root = std::make_unique<OperatorNode>(
+            AggregateOp{
+                std::move(root),
+                std::move(group_by),
+                std::move(aggs),
+                std::move(having)
+            }
+        );
+    }
     // 4. Wrap with Sort if ORDER BY is present
     if (stmt.order_by.has_value()) {
         root = std::make_unique<OperatorNode>(
