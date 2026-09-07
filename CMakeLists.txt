@@ -34,3 +34,18 @@ add_test_exe(test_parser    tests/test_parser.cpp)
 add_test_exe(test_catalog   tests/test_catalog.cpp)
 add_test_exe(test_sema      tests/test_sema.cpp)
 add_test_exe(test_planner   tests/test_planner.cpp)
+
+
+add_executable(integration_runtime_test integration_compile_test.cpp)
+
+target_link_libraries(
+    integration_runtime_test
+    PRIVATE
+    mini_sqlite_lib
+)
+
+target_sources(
+    integration_runtime_test
+    PRIVATE
+    src/storage/pager.cpp
+)
