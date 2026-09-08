@@ -7,6 +7,7 @@
 #include "exec/executor_adapter.h"
 #include "frontend/tokenizer.h"
 #include "frontend/parser.h"
+#include "common/eval.h"
 
 #include <iostream>
 #include <sstream>
@@ -170,6 +171,7 @@ void DatabaseEngine::executeParsed(const Statement& stmt) {
         else if constexpr (std::is_same_v<T, CreateIndexStmt>) executeCreateIndex(s);
         else if constexpr (std::is_same_v<T, InsertStmt>)      executeInsert(s);
         else if constexpr (std::is_same_v<T, DeleteStmt>)      executeDelete(s);
+        else if constexpr (std::is_same_v<T, UpdateStmt>)      executeUpdate(s);
         else if constexpr (std::is_same_v<T, SelectStmt>)      executeSelect(s);
         else if constexpr (std::is_same_v<T, TxnStmt>)         executeTxn(s);
     }, stmt);
@@ -411,7 +413,252 @@ void DatabaseEngine::executeDelete(const DeleteStmt& stmt) {
     std::cout << "[DML] DELETE FROM " << stmt.table_name << " -> " << candidate_rows.size() << " rows deleted\n";
 }
 
+// ── UPDATE ────────────────────────────────────────────────────────────────────
+//
+// SET EXPRESSION SEMANTICS: All SET expressions are evaluated against the
+// ORIGINAL row (before any assignment in this row is applied). This matches
+// SQL standard snapshot semantics and means:
+//
+//   UPDATE t SET a = b, b = a;
+//
+// will swap the values correctly — each RHS is read from the pre-update row.
+//
+// KNOWN LIMITATION: WAL crash-recovery (REDO) is not correctly implemented
+// in the underlying TxnManager. In-memory rollback (ROLLBACK statement) works
+// correctly via the brute-force before-image snapshot, but crash durability
+// for UPDATE is not guaranteed.
+
+void DatabaseEngine::executeUpdate(const UpdateStmt& stmt) {
+    TableSchema* schema = catalog_.get_table(stmt.table_name);
+    if (!schema) {
+        throw std::runtime_error(
+            "UPDATE: table '" + stmt.table_name + "' not in catalog");
+    }
+    if (schema->root_page_id < 0) {
+        throw std::runtime_error(
+            "UPDATE: table '" + stmt.table_name + "' has no storage root");
+    }
+
+    TxnId tid = ensure_txn();
+
+    // ── 1. Snapshot ALL existing pages before any mutation ────────────────────
+    uint32_t pages_before = pager_.page_count();
+    for (uint32_t pg = 1; pg < pages_before; pg++) {
+        Page* p = pager_.get_page(pg);
+        txn_mgr_.write_page(tid, pg, p->data);
+    }
+
+    // ── 2. Determine which column ordinals are being SET ──────────────────────
+    // Build a map: col_name -> assignment ordinal in stmt.updates (for lookup)
+    // Also detect if the primary key is being updated.
+    const std::string& pk_col = schema->primary_key;
+    bool pk_updated = false;
+    int  pk_col_ord = catalog_.column_ordinal(stmt.table_name, pk_col);
+
+    for (const auto& asgn : stmt.updates) {
+        if (asgn.column == pk_col) {
+            pk_updated = true;
+            break;
+        }
+    }
+
+    // Build schema structure for eval()
+    // We need the TableSchema* for the eval call — the catalog already has it.
+
+    // ── 3. Scan Phase: materialise matching rows ──────────────────────────────
+    SelectStmt dummy_sel;
+    dummy_sel.from.push_back({stmt.table_name, ""});
+    dummy_sel.columns.push_back("*");
+    if (stmt.where) {
+        dummy_sel.where = cloneExpr(*stmt.where);
+    }
+
+    Planner planner(catalog_);
+    std::unique_ptr<OperatorNode> plan = planner.plan(dummy_sel);
+    ExecutorAdapter adapter(pager_, catalog_);
+    OperatorPtr root = adapter.build(*plan);
+
+    root->open();
+    std::vector<Row> candidate_rows;
+    while (auto row = root->next()) {
+        candidate_rows.push_back(*row);
+    }
+
+    if (candidate_rows.empty()) {
+        auto_commit();
+        save_catalog();
+        std::cout << "[DML] UPDATE " << stmt.table_name << " -> 0 rows updated\n";
+        return;
+    }
+
+    // ── 4. For PK-update: pre-validate all new PKs for collisions ────────────
+    //      (check before any mutation so we don't leave a half-updated state)
+    if (pk_updated) {
+        // Collect all proposed new PKs
+        std::unordered_set<int64_t> proposed_pks;
+
+        for (const auto& old_row : candidate_rows) {
+            // Evaluate new PK expression against ORIGINAL row
+            int64_t old_pk = std::get<int64_t>(old_row[0]);
+            int64_t new_pk = old_pk;
+
+            for (const auto& asgn : stmt.updates) {
+                if (asgn.column == pk_col) {
+                    Value v = eval(asgn.value, old_row, *schema);
+                    if (!std::holds_alternative<int64_t>(v)) {
+                        throw std::runtime_error(
+                            "UPDATE: primary key must be INTEGER");
+                    }
+                    new_pk = std::get<int64_t>(v);
+                    break;
+                }
+            }
+
+            // Check for collision with existing rows that are NOT being updated
+            if (new_pk != old_pk) {
+                // Check against other proposed new PKs (duplicate in same stmt)
+                if (!proposed_pks.insert(new_pk).second) {
+                    throw std::runtime_error(
+                        "UPDATE: primary key collision within UPDATE statement: pk=" +
+                        std::to_string(new_pk));
+                }
+
+                // Check against rows NOT in candidate set
+                BTreeCursor chk_cursor(pager_,
+                    static_cast<PageId>(schema->root_page_id),
+                    schema->columns.size());
+                if (chk_cursor.seek(new_pk)) {
+                    // It exists — check if it's also being updated (will be deleted)
+                    Row existing = chk_cursor.current();
+                    int64_t existing_pk = std::get<int64_t>(existing[0]);
+                    bool is_also_candidate = false;
+                    for (const auto& cr : candidate_rows) {
+                        if (std::get<int64_t>(cr[0]) == existing_pk) {
+                            is_also_candidate = true;
+                            break;
+                        }
+                    }
+                    if (!is_also_candidate) {
+                        throw std::runtime_error(
+                            "UPDATE: new primary key " + std::to_string(new_pk) +
+                            " already exists");
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 5. Mutation Phase ─────────────────────────────────────────────────────
+    size_t rows_updated = 0;
+
+    for (const auto& old_row : candidate_rows) {
+        int64_t old_pk = std::get<int64_t>(old_row[0]);
+
+        // 5a. Build new_row: start from old_row, apply each assignment
+        //     ALL expressions evaluated against the ORIGINAL old_row (snapshot semantics)
+        Row new_row = old_row;
+        for (const auto& asgn : stmt.updates) {
+            int col_ord = catalog_.column_ordinal(stmt.table_name, asgn.column);
+            if (col_ord < 0) {
+                throw std::runtime_error(
+                    "UPDATE: column '" + asgn.column + "' not found in table '" +
+                    stmt.table_name + "'");
+            }
+            Value new_val = eval(asgn.value, old_row, *schema);  // eval against OLD row
+            new_row[static_cast<size_t>(col_ord)] = new_val;
+        }
+
+        int64_t new_pk = std::get<int64_t>(new_row[0]);
+
+        if (new_pk == old_pk) {
+            // ── 5b. Non-PK update path ────────────────────────────────────────
+            // For each indexed column: if value changed, remove old + insert new entry
+            for (auto& idx : schema->indexes) {
+                int col_ord = catalog_.column_ordinal(stmt.table_name, idx.column);
+                if (col_ord < 0) continue;
+                const Value& old_val = old_row[static_cast<size_t>(col_ord)];
+                const Value& new_val = new_row[static_cast<size_t>(col_ord)];
+
+                // Only update index if value actually changed
+                if (old_val != new_val) {
+                    IndexManager::remove_entry(pager_,
+                        static_cast<PageId>(idx.root_page_id), old_val, old_pk);
+
+                    // Update table row first (so it exists with correct data)
+                    // (We'll do the actual row write below, just prepare here)
+
+                    PageId new_idx_root = IndexManager::insert_entry(pager_,
+                        static_cast<PageId>(idx.root_page_id), new_val, old_pk);
+                    idx.root_page_id = static_cast<int>(new_idx_root);
+                }
+            }
+
+            // Update the table row in-place
+            BTreeCursor upd_cursor(pager_,
+                static_cast<PageId>(schema->root_page_id),
+                schema->columns.size());
+            if (!upd_cursor.seek(old_pk)) {
+                throw std::runtime_error(
+                    "UPDATE: internal error — row with pk=" +
+                    std::to_string(old_pk) + " not found on re-seek");
+            }
+            upd_cursor.update_current_row(new_row);  // may throw if row too large
+
+        } else {
+            // ── 5c. PK-update path: DELETE old + INSERT new ───────────────────
+            // Step 1: Remove all secondary index entries for old row
+            for (auto& idx : schema->indexes) {
+                int col_ord = catalog_.column_ordinal(stmt.table_name, idx.column);
+                if (col_ord < 0) continue;
+                const Value& old_val = old_row[static_cast<size_t>(col_ord)];
+                IndexManager::remove_entry(pager_,
+                    static_cast<PageId>(idx.root_page_id), old_val, old_pk);
+            }
+
+            // Step 2: Delete old table row
+            BTreeCursor del_cursor(pager_,
+                static_cast<PageId>(schema->root_page_id),
+                schema->columns.size());
+            if (!del_cursor.seek(old_pk)) {
+                throw std::runtime_error(
+                    "UPDATE(pk-change): internal error — old row pk=" +
+                    std::to_string(old_pk) + " not found");
+            }
+            del_cursor.delete_current_row();
+
+            // Step 3: Insert new table row (will throw on duplicate PK)
+            BTreeCursor ins_cursor(pager_,
+                static_cast<PageId>(schema->root_page_id),
+                schema->columns.size());
+            ins_cursor.insert(new_row);
+            // Update root in case of split
+            PageId new_tbl_root = ins_cursor.root_page_id();
+            if (static_cast<int>(new_tbl_root) != schema->root_page_id) {
+                schema->root_page_id = static_cast<int>(new_tbl_root);
+            }
+
+            // Step 4: Insert new secondary index entries
+            for (auto& idx : schema->indexes) {
+                int col_ord = catalog_.column_ordinal(stmt.table_name, idx.column);
+                if (col_ord < 0) continue;
+                const Value& new_val = new_row[static_cast<size_t>(col_ord)];
+                PageId new_idx_root = IndexManager::insert_entry(pager_,
+                    static_cast<PageId>(idx.root_page_id), new_val, new_pk);
+                idx.root_page_id = static_cast<int>(new_idx_root);
+            }
+        }
+
+        ++rows_updated;
+    }
+
+    auto_commit();
+    save_catalog();
+
+    std::cout << "[DML] UPDATE " << stmt.table_name << " -> " << rows_updated << " rows updated\n";
+}
+
 // ── SELECT ────────────────────────────────────────────────────────────────────
+
 
 void DatabaseEngine::executeSelect(const SelectStmt& stmt) {
     Planner planner(catalog_);
