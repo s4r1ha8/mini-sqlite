@@ -8,8 +8,8 @@
 
 class BTree {
 public:
-    BTree(Pager& pager, PageId root_page, size_t num_cols)
-        : pager_(pager), root_page_id_(root_page), num_cols_(num_cols) {}
+    BTree(Pager& pager, PageId root_page, size_t num_cols, bool unique_keys = true)
+        : pager_(pager), root_page_id_(root_page), num_cols_(num_cols), unique_keys_(unique_keys) {}
 
     static PageId create(Pager& pager) {
         PageId root_id = pager.allocate_page();
@@ -68,6 +68,7 @@ private:
     Pager&  pager_;
     PageId  root_page_id_;
     size_t  num_cols_;
+    bool    unique_keys_;
 
     // ── Descend from root to the correct leaf for `key` ──
     PageId find_leaf(int64_t key) {
@@ -80,7 +81,11 @@ private:
             // child[num_keys] covers keys >= key[num_keys-1]
             uint16_t nk = n.num_keys();
             uint16_t i  = 0;
-            while (i < nk && key >= n.internal_key(i)) i++;
+            if (unique_keys_) {
+                while (i < nk && key >= n.internal_key(i)) i++;
+            } else {
+                while (i < nk && key > n.internal_key(i)) i++;
+            }
             cur = (i < nk) ? n.internal_child(i) : n.internal_rightmost_child();
         }
     }
@@ -104,7 +109,7 @@ private:
         uint16_t n = node.num_keys();
 
         uint16_t slot = lower_bound(node, n, key);
-        if (slot < n && node.leaf_key(slot) == key)
+        if (unique_keys_ && slot < n && node.leaf_key(slot) == key)
             throw std::runtime_error("Duplicate PK: " + std::to_string(key));
 
         if (slot < n) {

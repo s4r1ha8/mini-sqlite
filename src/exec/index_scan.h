@@ -33,41 +33,39 @@ public:
         , table_root_(table_root)
         , index_root_(index_root)
         , num_cols_(num_cols)
-        , lookup_value_(std::move(lookup_value))
-        , done_(false) {}
+        , lookup_value_(std::move(lookup_value)) {}
 
     void open() override {
-        done_ = false;
-        result_.reset();
-
-        // Step 1: look up the index
-        auto pk = IndexManager::lookup(pager_, index_root_, lookup_value_);
-        if (!pk.has_value()) {
-            done_ = true; // not found in index
-            return;
-        }
-
-        // Step 2: fetch the full row from the main table using the PK
-        BTree table(pager_, table_root_, num_cols_);
-        auto row = table.search(*pk);
-        if (!row.has_value()) {
-            done_ = true; // shouldn't happen if index is consistent
-            return;
-        }
-
-        result_ = std::move(row);
+        target_key_ = IndexManager::value_to_key(lookup_value_);
+        cursor_ = IndexManager::open_cursor(pager_, index_root_, lookup_value_);
     }
 
     std::optional<Row> next() override {
-        if (done_ || !result_.has_value()) return std::nullopt;
-        // Point lookup returns at most one row — mark done after first call
-        done_ = true;
-        return result_;
+        while (cursor_ && !cursor_->is_exhausted()) {
+            Row r = cursor_->current();
+            int64_t cur_key = std::get<int64_t>(r[0]);
+            
+            if (cur_key != target_key_) {
+                cursor_.reset(); // no more matches
+                return std::nullopt;
+            }
+
+            int64_t pk = std::get<int64_t>(r[1]);
+            cursor_->next(); // advance for the next call
+
+            // fetch the full row from the main table using the PK
+            BTree table(pager_, table_root_, num_cols_); // Main table uses default unique_keys=true
+            auto row = table.search(pk);
+            if (row.has_value()) {
+                return row;
+            }
+            // If row not found in main table, it's a consistency error, but we skip and try the next index entry
+        }
+        return std::nullopt;
     }
 
     void close() override {
-        result_.reset();
-        done_ = true;
+        cursor_.reset();
     }
 
 private:
@@ -76,6 +74,6 @@ private:
     PageId   index_root_;
     size_t   num_cols_;
     Value    lookup_value_;
-    bool     done_;
-    std::optional<Row> result_;
+    int64_t  target_key_;
+    std::unique_ptr<BTreeCursor> cursor_;
 };

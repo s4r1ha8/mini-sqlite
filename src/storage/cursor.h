@@ -6,10 +6,11 @@
 
 class BTreeCursor : public Cursor {
 public:
-    BTreeCursor(Pager& pager, PageId root_page, size_t num_cols)
+    BTreeCursor(Pager& pager, PageId root_page, size_t num_cols, bool unique_keys = true)
         : pager_(pager)
         , root_page_id_(root_page)
         , num_cols_(num_cols)
+        , unique_keys_(unique_keys)
         , current_page_id_(root_page)
         , current_slot_(0)
         , exhausted_(true) {}
@@ -25,12 +26,19 @@ public:
             uint16_t mid = lo + (hi - lo) / 2;
             int64_t mk = node.leaf_key(mid);
             if (mk == target) {
-                current_page_id_ = leaf_id;
-                current_slot_    = mid;
-                exhausted_       = false;
-                return true;
-            } else if (mk < target) lo = mid + 1;
-            else hi = mid;
+                if (!unique_keys_) {
+                    hi = mid; // keep searching left
+                } else {
+                    current_page_id_ = leaf_id;
+                    current_slot_    = mid;
+                    exhausted_       = false;
+                    return true;
+                }
+            } else if (mk < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
         current_page_id_ = leaf_id;
         current_slot_    = lo;
@@ -49,10 +57,11 @@ public:
                 next_page = nn.next_leaf();
             }
             exhausted_ = true;
+            return false;
         } else {
             exhausted_ = false;
         }
-        return false;
+        return (lo < node.num_keys() && node.leaf_key(lo) == target);
     }
 
     bool next() override {
@@ -84,7 +93,7 @@ public:
     }
 
     void insert(Row row) override {
-        BTree tree(pager_, root_page_id_, num_cols_);
+        BTree tree(pager_, root_page_id_, num_cols_, unique_keys_);
         tree.insert(row);
         root_page_id_ = tree.root_page_id(); // update in case of split
         exhausted_ = true;
@@ -194,6 +203,7 @@ private:
     Pager&   pager_;
     PageId   root_page_id_;
     size_t   num_cols_;
+    bool     unique_keys_;
     PageId   current_page_id_;
     uint16_t current_slot_;
     bool     exhausted_;
@@ -207,7 +217,11 @@ private:
             if (n.node_type() == NodeType::Leaf) return cur;
             uint16_t nk = n.num_keys();
             uint16_t i  = 0;
-            while (i < nk && key >= n.internal_key(i)) i++;
+            if (unique_keys_) {
+                while (i < nk && key >= n.internal_key(i)) i++;
+            } else {
+                while (i < nk && key > n.internal_key(i)) i++;
+            }
             cur = (i < nk) ? n.internal_child(i) : n.internal_rightmost_child();
         }
     }

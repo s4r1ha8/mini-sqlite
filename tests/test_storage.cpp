@@ -300,73 +300,152 @@ static void testIndexMaintenance() {
         PageId idx_root = IndexManager::create(pager);
         idx_root = IndexManager::insert_entry(pager, idx_root, Value("Alice"), 100);
         
-        CHECK(IndexManager::lookup(pager, idx_root, Value("Alice")).has_value(), "Alice exists");
+        auto c1 = IndexManager::open_cursor(pager, idx_root, Value("Alice"));
+        CHECK(c1 && !c1->is_exhausted(), "Alice exists");
         IndexManager::remove_entry(pager, idx_root, Value("Alice"), 100);
-        CHECK(!IndexManager::lookup(pager, idx_root, Value("Alice")).has_value(), "Alice deleted (only entry)");
+        auto c2 = IndexManager::open_cursor(pager, idx_root, Value("Alice"));
+        CHECK(c2 && (c2->is_exhausted() || std::get<int64_t>(c2->current()[0]) != IndexManager::value_to_key(Value("Alice"))), "Alice deleted (only entry)");
         
-        // E. Repeated deletion / missing entry
+        // Repeated deletion / missing entry
         IndexManager::remove_entry(pager, idx_root, Value("Alice"), 100); // Should be safe
         IndexManager::remove_entry(pager, idx_root, Value("Bob"), 200);   // Missing entry
     }
     
     cleanup();
     
-    // C. First, Middle, Last entry deletion
+    // B. Duplicate index entries
     {
         Pager pager(temp_filename);
         PageId idx_root = IndexManager::create(pager);
-        idx_root = IndexManager::insert_entry(pager, idx_root, Value(10LL), 1);
+        
+        // Insert 3 duplicates
+        idx_root = IndexManager::insert_entry(pager, idx_root, Value(20LL), 1);
         idx_root = IndexManager::insert_entry(pager, idx_root, Value(20LL), 2);
-        idx_root = IndexManager::insert_entry(pager, idx_root, Value(30LL), 3);
-        
-        // Delete middle
+        idx_root = IndexManager::insert_entry(pager, idx_root, Value(20LL), 3);
+
+        auto cursor = IndexManager::open_cursor(pager, idx_root, Value(20LL));
+        int count = 0;
+        int64_t target_key = IndexManager::value_to_key(Value(20LL));
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            int64_t cur_k = std::get<int64_t>(r[0]);
+            int64_t pk = std::get<int64_t>(r[1]);
+            std::cout << "Dup scan found: key=" << cur_k << ", pk=" << pk << "\n";
+            if (cur_k != target_key) break;
+            count++;
+            cursor->next();
+        }
+        CHECK(count == 3, "Index scan returns 3 duplicates");
+
+        // Delete middle duplicate
         IndexManager::remove_entry(pager, idx_root, Value(20LL), 2);
-        CHECK(!IndexManager::lookup(pager, idx_root, Value(20LL)).has_value(), "Middle (20) deleted");
-        CHECK(IndexManager::lookup(pager, idx_root, Value(10LL)).has_value(), "First (10) remains");
-        CHECK(IndexManager::lookup(pager, idx_root, Value(30LL)).has_value(), "Last (30) remains");
-        
-        // Delete first
-        IndexManager::remove_entry(pager, idx_root, Value(10LL), 1);
-        CHECK(!IndexManager::lookup(pager, idx_root, Value(10LL)).has_value(), "First (10) deleted");
-        
-        // Delete last
-        IndexManager::remove_entry(pager, idx_root, Value(30LL), 3);
-        CHECK(!IndexManager::lookup(pager, idx_root, Value(30LL)).has_value(), "Last (30) deleted");
+        cursor = IndexManager::open_cursor(pager, idx_root, Value(20LL));
+        count = 0;
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            count++;
+            cursor->next();
+        }
+        CHECK(count == 2, "Index scan returns 2 duplicates after deleting middle");
+
+        // Delete first duplicate
+        IndexManager::remove_entry(pager, idx_root, Value(20LL), 1);
+        cursor = IndexManager::open_cursor(pager, idx_root, Value(20LL));
+        count = 0;
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            count++;
+            cursor->next();
+        }
+        CHECK(count == 1, "Index scan returns 1 duplicate after deleting first");
+
+        // Delete last duplicate
+        IndexManager::remove_entry(pager, idx_root, Value(20LL), 3);
+        cursor = IndexManager::open_cursor(pager, idx_root, Value(20LL));
+        count = 0;
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            count++;
+            cursor->next();
+        }
+        CHECK(count == 0, "Index scan returns 0 duplicates after deleting last");
     }
-    
+
+    cleanup();
+
+    // C. Update an indexed value (20 -> 30)
+    {
+        Pager pager(temp_filename);
+        PageId idx_root = IndexManager::create(pager);
+        idx_root = IndexManager::insert_entry(pager, idx_root, Value(20LL), 2);
+        
+        // update pk=2 from 20 -> 30
+        IndexManager::remove_entry(pager, idx_root, Value(20LL), 2);
+        idx_root = IndexManager::insert_entry(pager, idx_root, Value(30LL), 2);
+
+        auto c1 = IndexManager::open_cursor(pager, idx_root, Value(20LL));
+        CHECK(c1 && (c1->is_exhausted() || std::get<int64_t>(c1->current()[0]) != IndexManager::value_to_key(Value(20LL))), "20 deleted");
+
+        auto c2 = IndexManager::open_cursor(pager, idx_root, Value(30LL));
+        CHECK(c2 && !c2->is_exhausted() && std::get<int64_t>(c2->current()[0]) == IndexManager::value_to_key(Value(30LL)), "30 inserted");
+    }
+
     cleanup();
     
-    // F. Multiple index leaves + G. Persistence
+    // D. Persistence + Multiple index leaves + Duplicates
+    PageId saved_idx_root = NO_PAGE;
     {
         Pager pager(temp_filename);
         PageId idx_root = IndexManager::create(pager);
         
-        // Insert 40 entries to force B-Tree split (leaves max out at 32 cells usually)
-        for (int i = 1; i <= 40; i++) {
-            idx_root = IndexManager::insert_entry(pager, idx_root, Value(static_cast<int64_t>(i * 10)), i);
+        // Insert 50 entries of duplicate 20LL to force B-Tree split across leaves
+        for (int i = 1; i <= 50; i++) {
+            idx_root = IndexManager::insert_entry(pager, idx_root, Value(20LL), i);
         }
         
         // Delete across leaves
-        IndexManager::remove_entry(pager, idx_root, Value(50LL), 5); // From first leaf
-        IndexManager::remove_entry(pager, idx_root, Value(350LL), 35); // From second leaf
+        IndexManager::remove_entry(pager, idx_root, Value(20LL), 5); // From first leaf
+        IndexManager::remove_entry(pager, idx_root, Value(20LL), 45); // From second leaf
         
+        saved_idx_root = idx_root;
         pager.flush_all();
     }
     
     {
         Pager pager(temp_filename);
-        // Assuming root is page 0 (first allocated) or whatever it ended up being.
-        // Actually, IndexManager::create allocates page 0 if it's a fresh file.
-        // Wait, root might have changed due to splits!
-        // To verify persistence, we need the root page. If it split, the new root is 1 or 2.
-        // In a real DB, the catalog stores the root page. Here, we can just search for the last known root if we had it.
-        // For testing, let's just do the persistence test without restarting the pager if we didn't save the split root.
+        auto cursor = IndexManager::open_cursor(pager, saved_idx_root, Value(20LL));
+        int count = 0;
+        int64_t target_key = IndexManager::value_to_key(Value(20LL));
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            int64_t pk = std::get<int64_t>(r[1]);
+            CHECK(pk != 5 && pk != 45, "Deleted PKs should not appear");
+            count++;
+            cursor->next();
+        }
+        CHECK(count == 48, "Persistence scan returns 48 duplicates across leaves");
     }
+}
+
+static void testPrimaryKeyRejection() {
+    cleanup();
+    Pager pager(temp_filename);
+    PageId root = BTree::create(pager);
+    BTree tree(pager, root, 2); // Default unique_keys=true
+
+    tree.insert(make_row(10, "first"));
     
-    // Note: B. Duplicate indexed values is fundamentally unsupported by BTree right now.
-    // The current BTree::insert unconditionally throws "Duplicate PK" if the key matches.
-    // Therefore, duplicate indexed values cannot be inserted, and testing their deletion is impossible
-    // without first rewriting the storage layer to support duplicate keys entirely.
+    bool threw = false;
+    try {
+        tree.insert(make_row(10, "duplicate"));
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    CHECK(threw, "Primary key BTree rejects duplicate key correctly");
 }
 
 int main() {
@@ -377,6 +456,7 @@ int main() {
     testEmptyLeavesAndOverflow();
     testPersistence();
     testIndexMaintenance();
+    testPrimaryKeyRejection();
 
     std::cout << "Storage: " << passed << " passed, " << failed << " failed.\n";
     cleanup();

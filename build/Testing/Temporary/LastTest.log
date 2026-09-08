@@ -1,42 +1,42 @@
-Start testing: Sep 08 18:30 India Standard Time
+Start testing: Sep 08 21:06 India Standard Time
 ----------------------------------------------------------
-1/5 Testing: test_tokenizer
-1/5 Test: test_tokenizer
+1/6 Testing: test_tokenizer
+1/6 Test: test_tokenizer
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_tokenizer.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_tokenizer" start time: Sep 08 18:30 India Standard Time
+"test_tokenizer" start time: Sep 08 21:06 India Standard Time
 Output:
 ----------------------------------------------------------
 Tokenizer: 67 passed, 0 failed.
 <end of output>
-Test time =   0.05 sec
+Test time =   0.04 sec
 ----------------------------------------------------------
 Test Passed.
-"test_tokenizer" end time: Sep 08 18:30 India Standard Time
+"test_tokenizer" end time: Sep 08 21:06 India Standard Time
 "test_tokenizer" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-2/5 Testing: test_parser
-2/5 Test: test_parser
+2/6 Testing: test_parser
+2/6 Test: test_parser
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_parser.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_parser" start time: Sep 08 18:30 India Standard Time
+"test_parser" start time: Sep 08 21:06 India Standard Time
 Output:
 ----------------------------------------------------------
 Parser: 104 passed, 0 failed.
 <end of output>
-Test time =   0.05 sec
+Test time =   0.04 sec
 ----------------------------------------------------------
 Test Passed.
-"test_parser" end time: Sep 08 18:30 India Standard Time
+"test_parser" end time: Sep 08 21:06 India Standard Time
 "test_parser" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-3/5 Testing: test_catalog
-3/5 Test: test_catalog
+3/6 Testing: test_catalog
+3/6 Test: test_catalog
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_catalog.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_catalog" start time: Sep 08 18:30 India Standard Time
+"test_catalog" start time: Sep 08 21:06 India Standard Time
 Output:
 ----------------------------------------------------------
 Catalog: 27 passed, 0 failed.
@@ -44,31 +44,31 @@ Catalog: 27 passed, 0 failed.
 Test time =   0.05 sec
 ----------------------------------------------------------
 Test Passed.
-"test_catalog" end time: Sep 08 18:30 India Standard Time
+"test_catalog" end time: Sep 08 21:06 India Standard Time
 "test_catalog" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-4/5 Testing: test_sema
-4/5 Test: test_sema
+4/6 Testing: test_sema
+4/6 Test: test_sema
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_sema.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_sema" start time: Sep 08 18:30 India Standard Time
+"test_sema" start time: Sep 08 21:06 India Standard Time
 Output:
 ----------------------------------------------------------
-Sema: 34 passed, 0 failed.
+Sema: 43 passed, 0 failed.
 <end of output>
 Test time =   0.05 sec
 ----------------------------------------------------------
 Test Passed.
-"test_sema" end time: Sep 08 18:30 India Standard Time
+"test_sema" end time: Sep 08 21:06 India Standard Time
 "test_sema" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-5/5 Testing: test_planner
-5/5 Test: test_planner
+5/6 Testing: test_planner
+5/6 Test: test_planner
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_planner.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_planner" start time: Sep 08 18:30 India Standard Time
+"test_planner" start time: Sep 08 21:06 India Standard Time
 Output:
 ----------------------------------------------------------
 Planner: 39 passed, 0 failed.
@@ -76,8 +76,28 @@ Planner: 39 passed, 0 failed.
 Test time =   0.04 sec
 ----------------------------------------------------------
 Test Passed.
-"test_planner" end time: Sep 08 18:30 India Standard Time
+"test_planner" end time: Sep 08 21:06 India Standard Time
 "test_planner" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-End testing: Sep 08 18:30 India Standard Time
+6/6 Testing: test_storage
+6/6 Test: test_storage
+Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_storage.exe"
+Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
+"test_storage" start time: Sep 08 21:06 India Standard Time
+Output:
+----------------------------------------------------------
+Running Storage Tests...
+Dup scan found: key=20, pk=3
+Dup scan found: key=20, pk=2
+Dup scan found: key=20, pk=1
+Storage: 204 passed, 0 failed.
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"test_storage" end time: Sep 08 21:06 India Standard Time
+"test_storage" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Sep 08 21:06 India Standard Time

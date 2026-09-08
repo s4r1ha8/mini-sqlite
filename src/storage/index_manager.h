@@ -29,19 +29,30 @@ public:
     static PageId insert_entry(Pager& pager, PageId idx_root,
                                const Value& indexed_val, int64_t pk) {
         int64_t key = value_to_key(indexed_val);
-        BTree idx_tree(pager, idx_root, 2); // 2 cols: [key, pk]
+        BTree idx_tree(pager, idx_root, 2, false); // 2 cols: [key, pk], unique=false
         idx_tree.insert({ Value(key), Value(pk) });
         return idx_tree.root_page_id(); // save this!
     }
 
     // Look up PK for an indexed value. Returns nullopt if not found.
+    // Note: If duplicates exist, this only returns the first match found.
     static std::optional<int64_t> lookup(Pager& pager, PageId idx_root,
                                          const Value& indexed_val) {
         int64_t key = value_to_key(indexed_val);
-        BTree idx_tree(pager, idx_root, 2);
+        BTree idx_tree(pager, idx_root, 2, false);
         auto result = idx_tree.search(key);
         if (!result.has_value()) return std::nullopt;
         return std::get<int64_t>((*result)[1]); // col[1] is the PK
+    }
+
+    // Opens a cursor positioned at the first match for indexed_val.
+    // Useful for index scans over duplicate keys.
+    static std::unique_ptr<BTreeCursor> open_cursor(Pager& pager, PageId idx_root,
+                                                    const Value& indexed_val) {
+        int64_t key = value_to_key(indexed_val);
+        auto cursor = std::make_unique<BTreeCursor>(pager, idx_root, 2, false);
+        cursor->seek(key);
+        return cursor;
     }
 
     // Remove an index_val -> pk mapping.
@@ -49,7 +60,7 @@ public:
     static void remove_entry(Pager& pager, PageId idx_root,
                              const Value& indexed_val, int64_t pk) {
         int64_t key = value_to_key(indexed_val);
-        BTreeCursor cursor(pager, idx_root, 2);
+        BTreeCursor cursor(pager, idx_root, 2, false);
 
         if (cursor.seek(key)) {
             // Seek finds the first row >= key.
@@ -73,11 +84,7 @@ public:
         }
     }
 
-private:
-    // Convert any Value to an int64 key.
-    // Integers: used directly.
-    // Strings: FNV-1a hash (good for point lookups, not range scans).
-    // Doubles: bit-cast.
+    // Returns the raw integer key for a given value
     static int64_t value_to_key(const Value& v) {
         return std::visit([](const auto& val) -> int64_t {
             using T = std::decay_t<decltype(val)>;

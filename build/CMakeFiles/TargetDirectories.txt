@@ -5,6 +5,7 @@ D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/test_parser.dir
 D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/test_catalog.dir
 D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/test_sema.dir
 D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/test_planner.dir
+D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/test_storage.dir
 D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/integration_runtime_test.dir
 D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/RUN_TESTS.dir
 D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/ALL_BUILD.dir
