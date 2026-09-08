@@ -23,7 +23,6 @@
 #include "exec/nested_loop_join.h"
 #include "exec/aggregate.h"
 
-
 // ============================================================================
 // Runtime Project operator
 // ============================================================================
@@ -97,7 +96,6 @@ public:
             node.v
         );
     }
-
 
 private:
     Pager& pager_;
@@ -378,7 +376,6 @@ private:
 
         std::vector<size_t> columns;
 
-
         // --------------------------------------------------------------------
         // SELECT *
         // --------------------------------------------------------------------
@@ -402,9 +399,9 @@ private:
 
         } else {
 
-            // ---------------------------------------------------------------
+            // ----------------------------------------------------------------
             // Explicit projection
-            // ---------------------------------------------------------------
+            // ----------------------------------------------------------------
 
             columns.reserve(
                 op.columns.size()
@@ -452,33 +449,43 @@ private:
         OperatorPtr child =
             build(*op.child);
 
-        auto schema =
+        auto child_schema =
             schemaForNode(*op.child);
 
-        if (!schema) {
+        if (!child_schema) {
             throw std::runtime_error(
                 "ExecutorAdapter: cannot determine "
                 "schema for Aggregate"
             );
         }
 
+        // This is the schema of the rows produced by the Aggregate operator.
+        // HAVING must be evaluated against this schema, not the input schema.
+        auto aggregate_schema =
+            std::make_shared<TableSchema>();
+
+        aggregate_schema->name =
+            child_schema->name +
+            "_AGGREGATE";
+
+        aggregate_schema->primary_key.clear();
+        aggregate_schema->root_page_id = -1;
+
+        int output_ordinal = 0;
 
         // --------------------------------------------------------------------
-        // GROUP BY columns
+        // GROUP BY input column ordinals
         // --------------------------------------------------------------------
 
         std::vector<size_t> group_by_cols;
-
-        group_by_cols.reserve(
-            op.group_by.size()
-        );
+        group_by_cols.reserve(op.group_by.size());
 
         for (const auto& name :
              op.group_by) {
 
             int ordinal =
                 findColumnOrdinal(
-                    *schema,
+                    *child_schema,
                     name
                 );
 
@@ -491,12 +498,163 @@ private:
             }
 
             group_by_cols.push_back(
-                static_cast<size_t>(
-                    ordinal
-                )
+                static_cast<size_t>(ordinal)
             );
         }
 
+        // --------------------------------------------------------------------
+        // GROUP BY output columns
+        // --------------------------------------------------------------------
+
+        for (const auto& name :
+             op.group_by) {
+
+            int ordinal =
+                findColumnOrdinal(
+                    *child_schema,
+                    name
+                );
+
+            if (ordinal < 0) {
+                throw std::runtime_error(
+                    "ExecutorAdapter: GROUP BY column '" +
+                    name +
+                    "' not found"
+                );
+            }
+
+            ColumnInfo column =
+                child_schema->columns[
+                    static_cast<size_t>(
+                        ordinal
+                    )
+                ];
+
+            column.ordinal =
+                output_ordinal++;
+
+            aggregate_schema->columns.push_back(
+                std::move(column)
+            );
+        }
+
+        // --------------------------------------------------------------------
+        // Aggregate output columns
+        // --------------------------------------------------------------------
+
+        for (const auto& aggregate :
+             op.aggregates) {
+
+            ColumnInfo column;
+
+            column.ordinal =
+                output_ordinal++;
+
+            column.is_not_null = false;
+
+            if (aggregate.is_star) {
+
+                if (aggregate.func !=
+                    AggFunc::COUNT) {
+
+                    throw std::runtime_error(
+                        "ExecutorAdapter: '*' is only "
+                        "valid for COUNT"
+                    );
+                }
+
+                column.name =
+                    "COUNT(*)";
+
+                column.type =
+                    DataType::INTEGER;
+
+            } else {
+
+                if (!aggregate.arg) {
+                    throw std::runtime_error(
+                        "ExecutorAdapter: aggregate "
+                        "argument is missing"
+                    );
+                }
+
+                const auto* arg =
+                    std::get_if<ColumnRef>(
+                        &aggregate.arg->node
+                    );
+
+                if (!arg) {
+                    throw std::runtime_error(
+                        "ExecutorAdapter: aggregate argument "
+                        "must be a column"
+                    );
+                }
+
+                std::string arg_name =
+                    arg->table.has_value()
+                        ? *arg->table +
+                          "." +
+                          arg->column
+                        : arg->column;
+
+                switch (aggregate.func) {
+
+                    case AggFunc::COUNT:
+                        column.name =
+                            "COUNT(" +
+                            arg_name +
+                            ")";
+
+                        column.type =
+                            DataType::INTEGER;
+                        break;
+
+                    case AggFunc::SUM:
+                        column.name =
+                            "SUM(" +
+                            arg_name +
+                            ")";
+
+                        column.type =
+                            DataType::REAL;
+                        break;
+
+                    case AggFunc::AVG:
+                        column.name =
+                            "AVG(" +
+                            arg_name +
+                            ")";
+
+                        column.type =
+                            DataType::REAL;
+                        break;
+
+                    case AggFunc::MIN:
+                        column.name =
+                            "MIN(" +
+                            arg_name +
+                            ")";
+
+                        column.type =
+                            DataType::REAL;
+                        break;
+
+                    case AggFunc::MAX:
+                        column.name =
+                            "MAX(" +
+                            arg_name +
+                            ")";
+
+                        column.type =
+                            DataType::REAL;
+                        break;
+                }
+            }
+
+            aggregate_schema->columns.push_back(
+                std::move(column)
+            );
+        }
 
         // --------------------------------------------------------------------
         // Aggregate calls
@@ -511,10 +669,7 @@ private:
         for (const auto& aggregate :
              op.aggregates) {
 
-            // ---------------------------------------------------------------
             // COUNT(*)
-            // ---------------------------------------------------------------
-
             if (aggregate.is_star) {
 
                 if (aggregate.func !=
@@ -536,11 +691,7 @@ private:
                 continue;
             }
 
-
-            // ---------------------------------------------------------------
             // Aggregate argument
-            // ---------------------------------------------------------------
-
             if (!aggregate.arg) {
                 throw std::runtime_error(
                     "ExecutorAdapter: aggregate "
@@ -560,10 +711,9 @@ private:
                 );
             }
 
-
             int ordinal =
                 findColumnOrdinal(
-                    *schema,
+                    *child_schema,
                     arg->table.has_value()
                         ? *arg->table +
                           "." +
@@ -578,7 +728,6 @@ private:
                     "' not found"
                 );
             }
-
 
             RuntimeAggFunc runtime_func;
 
@@ -620,11 +769,26 @@ private:
             );
         }
 
+        // --------------------------------------------------------------------
+        // HAVING
+        // --------------------------------------------------------------------
+
+        std::optional<Expr> having;
+
+if (op.having.has_value()) {
+    having =
+        rewriteHavingForAggregate(
+            *op.having,
+            *aggregate_schema
+        );
+}
 
         return std::make_unique<Aggregate>(
             std::move(child),
             std::move(group_by_cols),
-            std::move(agg_calls)
+            std::move(agg_calls),
+            std::move(having),
+            std::move(aggregate_schema)
         );
     }
 
@@ -642,12 +806,15 @@ private:
         OperatorPtr right =
             build(*op.right);
 
-       
         auto left_schema =
-            schemaForNode(*op.left);
+            schemaForNode(
+                *op.left
+            );
 
         auto right_schema =
-            schemaForNode(*op.right);
+            schemaForNode(
+                *op.right
+            );
 
         if (!left_schema ||
             !right_schema) {
@@ -717,8 +884,9 @@ private:
                 -> std::shared_ptr<TableSchema> {
 
                 using T =
-                    std::decay_t<decltype(op)>;
-
+                    std::decay_t<
+                        decltype(op)
+                    >;
 
                 // ------------------------------------------------------------
                 // SeqScan
@@ -766,7 +934,6 @@ private:
                     return result;
                 }
 
-
                 // ------------------------------------------------------------
                 // IndexScan
                 // ------------------------------------------------------------
@@ -813,7 +980,6 @@ private:
                     return result;
                 }
 
-
                 // ------------------------------------------------------------
                 // Filter
                 // ------------------------------------------------------------
@@ -830,7 +996,6 @@ private:
                     );
                 }
 
-
                 // ------------------------------------------------------------
                 // Sort
                 // ------------------------------------------------------------
@@ -846,7 +1011,6 @@ private:
                         *op.child
                     );
                 }
-
 
                 // ------------------------------------------------------------
                 // Project
@@ -878,7 +1042,6 @@ private:
                     result->primary_key.clear();
                     result->root_page_id = -1;
 
-
                     if (op.columns.size() == 1 &&
                         op.columns[0] == "*") {
 
@@ -901,7 +1064,6 @@ private:
 
                         return result;
                     }
-
 
                     for (
                         const auto& requested :
@@ -938,7 +1100,6 @@ private:
                     return result;
                 }
 
-
                 // ------------------------------------------------------------
                 // NestedLoopJoin
                 // ------------------------------------------------------------
@@ -974,7 +1135,6 @@ private:
                     );
                 }
 
-
                 // ------------------------------------------------------------
                 // Aggregate
                 // ------------------------------------------------------------
@@ -1005,9 +1165,7 @@ private:
                     result->primary_key.clear();
                     result->root_page_id = -1;
 
-
                     int ordinal = 0;
-
 
                     // GROUP BY output columns
                     for (
@@ -1040,7 +1198,6 @@ private:
                         );
                     }
 
-
                     // Aggregate output columns
                     for (
                         const auto& aggregate :
@@ -1054,8 +1211,12 @@ private:
 
                         column.is_not_null = false;
 
-
                         if (aggregate.is_star) {
+
+                            if (aggregate.func !=
+                                AggFunc::COUNT) {
+                                return nullptr;
+                            }
 
                             column.name =
                                 "COUNT(*)";
@@ -1092,6 +1253,7 @@ private:
                                         "COUNT(" +
                                         arg_name +
                                         ")";
+
                                     column.type =
                                         DataType::INTEGER;
                                     break;
@@ -1101,6 +1263,7 @@ private:
                                         "SUM(" +
                                         arg_name +
                                         ")";
+
                                     column.type =
                                         DataType::REAL;
                                     break;
@@ -1110,6 +1273,7 @@ private:
                                         "AVG(" +
                                         arg_name +
                                         ")";
+
                                     column.type =
                                         DataType::REAL;
                                     break;
@@ -1119,6 +1283,7 @@ private:
                                         "MIN(" +
                                         arg_name +
                                         ")";
+
                                     column.type =
                                         DataType::REAL;
                                     break;
@@ -1128,6 +1293,7 @@ private:
                                         "MAX(" +
                                         arg_name +
                                         ")";
+
                                     column.type =
                                         DataType::REAL;
                                     break;
@@ -1141,7 +1307,6 @@ private:
 
                     return result;
                 }
-
 
                 else {
                     return nullptr;
@@ -1168,9 +1333,9 @@ private:
         const std::string& requested
     ) {
 
-        // ------------------------------------------------------------
+        // --------------------------------------------------------------------
         // Exact match first
-        // ------------------------------------------------------------
+        // --------------------------------------------------------------------
 
         for (
             const auto& column :
@@ -1184,10 +1349,9 @@ private:
             }
         }
 
-
-        // ------------------------------------------------------------
+        // --------------------------------------------------------------------
         // Bare-name lookup
-        // ------------------------------------------------------------
+        // --------------------------------------------------------------------
 
         std::string requested_bare =
             requested;
@@ -1204,10 +1368,8 @@ private:
                 );
         }
 
-
         int found =
             -1;
-
 
         for (
             const auto& column :
@@ -1244,9 +1406,181 @@ private:
                 column.ordinal;
         }
 
-
         return found;
     }
+
+
+    // ========================================================================
+    // Rewrite aggregate calls in HAVING into references to the
+    // materialized aggregate output columns.
+    // ========================================================================
+
+    static std::string aggregateOutputName(
+        const AggregateCall& aggregate
+    ) {
+        std::string name;
+
+        switch (aggregate.func) {
+            case AggFunc::COUNT:
+                name = "COUNT(";
+                break;
+
+            case AggFunc::SUM:
+                name = "SUM(";
+                break;
+
+            case AggFunc::AVG:
+                name = "AVG(";
+                break;
+
+            case AggFunc::MIN:
+                name = "MIN(";
+                break;
+
+            case AggFunc::MAX:
+                name = "MAX(";
+                break;
+        }
+
+        if (aggregate.is_star) {
+            name += "*";
+        } else {
+            const auto* ref =
+                std::get_if<ColumnRef>(
+                    &aggregate.arg->node
+                );
+
+            if (!ref) {
+                throw std::runtime_error(
+                    "ExecutorAdapter: aggregate "
+                    "argument in HAVING must be "
+                    "a column reference"
+                );
+            }
+
+            if (ref->table.has_value()) {
+                name +=
+                    *ref->table +
+                    ".";
+            }
+
+            name +=
+                ref->column;
+        }
+
+        name += ")";
+
+        return name;
+    }
+
+
+    static Expr rewriteHavingForAggregate(
+        const Expr& expr,
+        const TableSchema& aggregate_schema
+    ) {
+        return std::visit(
+            [&](const auto& node) -> Expr {
+                using T =
+                    std::decay_t<decltype(node)>;
+
+                if constexpr (
+                    std::is_same_v<T, ColumnRef>
+                ) {
+                    return Expr{
+                        ColumnRef{
+                            node.table,
+                            node.column
+                        }
+                    };
+                }
+
+                else if constexpr (
+                    std::is_same_v<T, Literal>
+                ) {
+                    return Expr{
+                        Literal{
+                            node.value
+                        }
+                    };
+                }
+
+                else if constexpr (
+                    std::is_same_v<T, BinaryOp>
+                ) {
+                    return Expr{
+                        BinaryOp{
+                            std::make_unique<Expr>(
+                                rewriteHavingForAggregate(
+                                    *node.left,
+                                    aggregate_schema
+                                )
+                            ),
+                            node.op,
+                            std::make_unique<Expr>(
+                                rewriteHavingForAggregate(
+                                    *node.right,
+                                    aggregate_schema
+                                )
+                            )
+                        }
+                    };
+                }
+
+                else if constexpr (
+                    std::is_same_v<T, UnaryOp>
+                ) {
+                    return Expr{
+                        UnaryOp{
+                            node.op,
+                            std::make_unique<Expr>(
+                                rewriteHavingForAggregate(
+                                    *node.operand,
+                                    aggregate_schema
+                                )
+                            )
+                        }
+                    };
+                }
+
+                else if constexpr (
+                    std::is_same_v<T, AggregateCall>
+                ) {
+                    const std::string name =
+                        aggregateOutputName(node);
+
+                    if (
+                        findColumnOrdinal(
+                            aggregate_schema,
+                            name
+                        ) < 0
+                    ) {
+                        throw std::runtime_error(
+                            "ExecutorAdapter: aggregate "
+                            "output column '" +
+                            name +
+                            "' not found in HAVING schema"
+                        );
+                    }
+
+                    return Expr{
+                        ColumnRef{
+                            std::nullopt,
+                            name
+                        }
+                    };
+                }
+
+                else {
+                    throw std::runtime_error(
+                        "ExecutorAdapter: unsupported "
+                        "expression in HAVING"
+                    );
+                }
+            },
+            expr.node
+        );
+    }
+
 
 
     // ========================================================================
@@ -1276,9 +1610,7 @@ private:
         result.primary_key.clear();
         result.root_page_id = -1;
 
-
         int ordinal = 0;
-
 
         for (
             const auto& column :
@@ -1296,7 +1628,6 @@ private:
             );
         }
 
-
         for (
             const auto& column :
             right.columns
@@ -1312,7 +1643,6 @@ private:
                 std::move(copy)
             );
         }
-
 
         return result;
     }

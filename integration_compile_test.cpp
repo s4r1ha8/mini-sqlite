@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "common/ast.h"
 #include "common/cursor_interface.h"
@@ -20,28 +21,19 @@
 #include "storage/index_manager.h"
 #include "storage/pager.h"
 
-
 // ============================================================================
 // Helpers
 // ============================================================================
 
 static Statement parseSql(const std::string& sql) {
-    std::cout << "[parse] tokenizing...\n";
+    std::cout << "[parse] SQL: " << sql << "\n";
 
     Tokenizer tokenizer(sql);
     auto tokens = tokenizer.tokenize();
 
-    std::cout
-        << "[parse] token count: "
-        << tokens.size()
-        << "\n";
-
-    std::cout << "[parse] parsing...\n";
-
     Parser parser(std::move(tokens));
     return parser.parse();
 }
-
 
 static void addColumn(
     TableSchema& schema,
@@ -60,6 +52,72 @@ static void addColumn(
     schema.columns.push_back(column);
 }
 
+static int64_t getInt(const Value& value) {
+    return std::get<int64_t>(value);
+}
+
+static double getDouble(const Value& value) {
+    return std::get<double>(value);
+}
+
+static std::string getString(const Value& value) {
+    return std::get<std::string>(value);
+}
+
+// ============================================================================
+// Execute helper
+// ============================================================================
+
+static std::vector<Row> executeSql(
+    const std::string& sql,
+    Pager& pager,
+    Catalog& catalog
+) {
+    std::cout << "\n============================================================\n";
+    std::cout << "Executing: " << sql << "\n";
+    std::cout << "============================================================\n";
+
+    Statement statement = parseSql(sql);
+
+    SemanticAnalyzer semantic_analyzer(catalog);
+    semantic_analyzer.analyze(statement);
+
+    const SelectStmt& select =
+        std::get<SelectStmt>(statement);
+
+    Planner planner(catalog);
+
+    std::unique_ptr<OperatorNode> plan =
+        planner.plan(select);
+
+    std::cout << "Plan:\n"
+              << Planner::printTree(*plan)
+              << "\n";
+
+    ExecutorAdapter executor(pager, catalog);
+
+    OperatorPtr root =
+        executor.build(*plan);
+
+    root->open();
+
+    std::vector<Row> results;
+
+    while (auto row = root->next()) {
+        results.push_back(std::move(*row));
+
+        if (results.size() > 1000) {
+            root->close();
+            throw std::runtime_error(
+                "Integration test returned more than 1000 rows."
+            );
+        }
+    }
+
+    root->close();
+
+    return results;
+}
 
 // ============================================================================
 // Main
@@ -72,9 +130,8 @@ int main() {
 
     std::remove(db_file);
 
-
     // ========================================================================
-    // 1. Create Pager + table B-tree
+    // 1. Create Pager + users B-tree
     // ========================================================================
 
     std::cout
@@ -93,61 +150,54 @@ int main() {
         << users_root
         << "\n";
 
-
     BTree users_tree(
         pager,
         users_root,
-        2
+        3
     );
-
 
     // ========================================================================
     // 2. Insert users
     //
-    // users(id, name)
+    // users(id, name, score)
     //
-    // 1 Alice
-    // 2 Bob
-    // 3 Carol
+    // 1 Alice 100
+    // 2 Bob   200
+    // 3 Carol 150
     // ========================================================================
 
     std::cout
         << "[2] Inserting users...\n";
 
-
     users_tree.insert(
         Row{
             Value(int64_t(1)),
-            Value(std::string("Alice"))
+            Value(std::string("Alice")),
+            Value(double(100.0))
         }
     );
-
 
     users_tree.insert(
         Row{
             Value(int64_t(2)),
-            Value(std::string("Bob"))
+            Value(std::string("Bob")),
+            Value(double(200.0))
         }
     );
-
 
     users_tree.insert(
         Row{
             Value(int64_t(3)),
-            Value(std::string("Carol"))
+            Value(std::string("Carol")),
+            Value(double(150.0))
         }
     );
-
 
     std::cout
         << "[2] Users inserted.\n";
 
-
     // ========================================================================
     // 3. Create secondary index on users.name
-    //
-    // index:
-    //     name -> primary key
     //
     // Alice -> 1
     // Bob   -> 2
@@ -157,10 +207,8 @@ int main() {
     std::cout
         << "[3] Creating users.name index...\n";
 
-
     PageId users_index_root =
         IndexManager::create(pager);
-
 
     users_index_root =
         IndexManager::insert_entry(
@@ -170,7 +218,6 @@ int main() {
             1
         );
 
-
     users_index_root =
         IndexManager::insert_entry(
             pager,
@@ -178,7 +225,6 @@ int main() {
             Value(std::string("Bob")),
             2
         );
-
 
     users_index_root =
         IndexManager::insert_entry(
@@ -188,12 +234,10 @@ int main() {
             3
         );
 
-
     std::cout
         << "[3] users.name index root = "
         << users_index_root
         << "\n";
-
 
     // ========================================================================
     // 4. Flush storage
@@ -207,7 +251,6 @@ int main() {
     std::cout
         << "[4] Pager flushed.\n";
 
-
     // ========================================================================
     // 5. Build Catalog
     // ========================================================================
@@ -215,9 +258,7 @@ int main() {
     std::cout
         << "[5] Building Catalog...\n";
 
-
     Catalog catalog;
-
 
     TableSchema users_schema;
 
@@ -232,7 +273,6 @@ int main() {
             users_tree.root_page_id()
         );
 
-
     addColumn(
         users_schema,
         "id",
@@ -241,7 +281,6 @@ int main() {
         true
     );
 
-
     addColumn(
         users_schema,
         "name",
@@ -249,8 +288,13 @@ int main() {
         1
     );
 
+    addColumn(
+        users_schema,
+        "score",
+        DataType::REAL,
+        2
+    );
 
-    // Register secondary index in the catalog.
     users_schema.indexes.push_back(
         IndexInfo{
             "idx_users_name",
@@ -261,372 +305,324 @@ int main() {
         }
     );
 
-
     catalog.add_table(
         std::move(users_schema)
     );
 
-
     std::cout
         << "[5] Catalog ready.\n";
 
-
     // ========================================================================
-    // 6. Parse SQL
-    //
-    // The planner should recognize:
-    //
-    //     name = 'Bob'
-    //
-    // as an indexed equality and choose IndexScan.
+    // 6. IndexScan runtime integration
     // ========================================================================
 
-    const std::string sql =
-        "SELECT * "
-        "FROM users "
-        "WHERE name = 'Bob'";
+    {
+        const std::string sql =
+            "SELECT * "
+            "FROM users "
+            "WHERE name = 'Bob'";
 
+        std::vector<Row> results =
+            executeSql(
+                sql,
+                pager,
+                catalog
+            );
 
-    std::cout
-        << "[6] SQL:\n"
-        << "     "
-        << sql
-        << "\n";
+        assert(results.size() == 1);
+        assert(results[0].size() == 3);
 
-
-    std::cout
-        << "[6] Before parseSql...\n";
-
-
-    Statement statement =
-        parseSql(sql);
-
-
-    std::cout
-        << "[6] After parseSql.\n";
-
-
-    // ========================================================================
-    // 7. Semantic analysis
-    // ========================================================================
-
-    std::cout
-        << "[7] Before semantic analysis...\n";
-
-
-    SemanticAnalyzer semantic_analyzer(
-        catalog
-    );
-
-
-    semantic_analyzer.analyze(
-        statement
-    );
-
-
-    std::cout
-        << "[7] After semantic analysis.\n";
-
-
-    const SelectStmt& select =
-        std::get<SelectStmt>(
-            statement
+        assert(
+            getInt(results[0][0]) == 2
         );
 
-
-    // ========================================================================
-    // 8. Planner
-    // ========================================================================
-
-    std::cout
-        << "[8] Before planning...\n";
-
-
-    Planner planner(
-        catalog
-    );
-
-
-    std::unique_ptr<OperatorNode> plan =
-        planner.plan(
-            select
+        assert(
+            getString(results[0][1]) == "Bob"
         );
 
-
-    std::cout
-        << "[8] After planning.\n";
-
-
-    std::cout
-        << "[8] Plan:\n"
-        << Planner::printTree(*plan)
-        << "\n";
-
-
-    // ========================================================================
-    // 9. Verify that Planner selected IndexScan
-    // ========================================================================
-
-    bool has_index_scan =
-        false;
-
-
-    std::visit(
-        [&](const auto& op) {
-
-            using T =
-                std::decay_t<
-                    decltype(op)
-                >;
-
-            if constexpr (
-                std::is_same_v<
-                    T,
-                    ProjectOp
-                >
-            ) {
-
-                if (!op.child) {
-                    return;
-                }
-
-
-                std::visit(
-                    [&](const auto& child_op) {
-
-                        using ChildT =
-                            std::decay_t<
-                                decltype(child_op)
-                            >;
-
-                        if constexpr (
-                            std::is_same_v<
-                                ChildT,
-                                IndexScanOp
-                            >
-                        ) {
-                            has_index_scan = true;
-                        }
-
-                        else if constexpr (
-                            std::is_same_v<
-                                ChildT,
-                                FilterOp
-                            >
-                        ) {
-
-                            if (!child_op.child) {
-                                return;
-                            }
-
-                            std::visit(
-                                [&](const auto& grandchild_op) {
-
-                                    using GrandchildT =
-                                        std::decay_t<
-                                            decltype(grandchild_op)
-                                        >;
-
-                                    if constexpr (
-                                        std::is_same_v<
-                                            GrandchildT,
-                                            IndexScanOp
-                                        >
-                                    ) {
-                                        has_index_scan = true;
-                                    }
-
-                                },
-                                child_op.child->v
-                            );
-                        }
-
-                    },
-                    op.child->v
-                );
-            }
-
-        },
-        plan->v
-    );
-
-
-    assert(
-        has_index_scan
-    );
-
-
-    std::cout
-        << "[9] Planner selected IndexScan.\n";
-
-
-    // ========================================================================
-    // 10. Executor construction
-    // ========================================================================
-
-    std::cout
-        << "[10] Before ExecutorAdapter construction...\n";
-
-
-    ExecutorAdapter executor(
-        pager,
-        catalog
-    );
-
-
-    std::cout
-        << "[10] Before executor.build...\n";
-
-
-    OperatorPtr root =
-        executor.build(
-            *plan
+        assert(
+            getDouble(results[0][2]) == 200.0
         );
-
-
-    std::cout
-        << "[10] After executor.build.\n";
-
-
-    // ========================================================================
-    // 11. Execute
-    // ========================================================================
-
-    std::cout
-        << "[11] Before root->open()...\n";
-
-
-    root->open();
-
-
-    std::cout
-        << "[11] After root->open().\n";
-
-
-    std::vector<Row> results;
-
-
-    std::cout
-        << "[11] Before next() loop...\n";
-
-
-    size_t iteration = 0;
-
-
-    while (auto row = root->next()) {
-
-        ++iteration;
-
 
         std::cout
-            << "[11] next() returned row "
-            << iteration
-            << " with "
-            << row->size()
-            << " columns.\n";
+            << "IndexScan runtime integration test passed.\n";
+    }
 
+    // ========================================================================
+    // 7. COUNT(*) runtime integration
+    //
+    // SELECT COUNT(*) FROM users
+    //
+    // Expected:
+    //     3
+    // ========================================================================
 
-        results.push_back(
-            std::move(*row)
+    {
+        const std::string sql =
+            "SELECT COUNT(*) "
+            "FROM users";
+
+        std::vector<Row> results =
+            executeSql(
+                sql,
+                pager,
+                catalog
+            );
+
+        assert(results.size() == 1);
+        assert(results[0].size() == 1);
+
+        assert(
+            getInt(results[0][0]) == 3
         );
 
+        std::cout
+            << "COUNT(*) runtime integration test passed.\n";
+    }
 
-        if (iteration > 100) {
+    // ========================================================================
+    // 8. COUNT(column) runtime integration
+    //
+    // SELECT COUNT(id) FROM users
+    //
+    // Expected:
+    //     3
+    // ========================================================================
 
-            std::cerr
-                << "[11] ERROR: more than 100 rows returned.\n";
+    {
+        const std::string sql =
+            "SELECT COUNT(id) "
+            "FROM users";
 
-            root->close();
+        std::vector<Row> results =
+            executeSql(
+                sql,
+                pager,
+                catalog
+            );
 
-            pager.flush_all();
+        assert(results.size() == 1);
+        assert(results[0].size() == 1);
 
-            std::remove(db_file);
+        assert(
+            getInt(results[0][0]) == 3
+        );
 
-            return 2;
+        std::cout
+            << "COUNT(id) runtime integration test passed.\n";
+    }
+
+    // ========================================================================
+    // 9. SUM / AVG / MIN / MAX runtime integration
+    //
+    // SELECT SUM(score), AVG(score), MIN(score), MAX(score) FROM users
+    //
+    // Expected:
+    //     SUM = 450
+    //     AVG = 150
+    //     MIN = 100
+    //     MAX = 200
+    // ========================================================================
+
+    {
+        const std::string sql =
+            "SELECT SUM(score), AVG(score), MIN(score), MAX(score) "
+            "FROM users";
+
+        std::vector<Row> results =
+            executeSql(
+                sql,
+                pager,
+                catalog
+            );
+
+        assert(results.size() == 1);
+        assert(results[0].size() == 4);
+
+        assert(
+            getDouble(results[0][0]) == 450.0
+        );
+
+        assert(
+            getDouble(results[0][1]) == 150.0
+        );
+
+        assert(
+            getDouble(results[0][2]) == 100.0
+        );
+
+        assert(
+            getDouble(results[0][3]) == 200.0
+        );
+
+        std::cout
+            << "SUM/AVG/MIN/MAX runtime integration test passed.\n";
+    }
+
+    // ========================================================================
+    // 10. GROUP BY + COUNT(*)
+    //
+    // Use name as the grouping column so every row is its own group.
+    //
+    // Expected three rows:
+    //     Alice | 1
+    //     Bob   | 1
+    //     Carol | 1
+    //
+    // unordered_map means output order is not guaranteed.
+    // ========================================================================
+
+    {
+        const std::string sql =
+            "SELECT name, COUNT(*) "
+            "FROM users "
+            "GROUP BY name";
+
+        std::vector<Row> results =
+            executeSql(
+                sql,
+                pager,
+                catalog
+            );
+
+        assert(results.size() == 3);
+
+        std::vector<std::string> names;
+
+        for (const Row& row : results) {
+            assert(row.size() == 2);
+            assert(getInt(row[1]) == 1);
+            names.push_back(getString(row[0]));
         }
+
+        std::sort(names.begin(), names.end());
+
+        assert(names.size() == 3);
+        assert(names[0] == "Alice");
+        assert(names[1] == "Bob");
+        assert(names[2] == "Carol");
+
+        std::cout
+            << "GROUP BY + COUNT(*) runtime integration test passed.\n";
     }
 
 
-    std::cout
-        << "[11] next() returned nullopt.\n";
-
-
-    root->close();
-
-
-    std::cout
-        << "[11] Executor closed.\n";
-
 
     // ========================================================================
-    // 12. Validate result
+    // 11. GROUP BY + COUNT(*) + HAVING
+    //
+    // orders(id, user_id, total)
+    //
+    // 1 | 1 | 10
+    // 2 | 1 | 20
+    // 3 | 2 |  5
     //
     // Expected:
-    //
-    //     2 | Bob
+    //     user_id = 1 | COUNT(*) = 2
     // ========================================================================
 
-    std::cout
-        << "[12] Validating results...\n";
+    {
+        PageId orders_root = BTree::create(pager);
 
+        BTree orders_tree(
+            pager,
+            orders_root,
+            3
+        );
 
-    assert(
-        results.size() == 1
-    );
+        orders_tree.insert(
+            Row{
+                Value(int64_t(1)),
+                Value(int64_t(1)),
+                Value(double(10.0))
+            }
+        );
 
+        orders_tree.insert(
+            Row{
+                Value(int64_t(2)),
+                Value(int64_t(1)),
+                Value(double(20.0))
+            }
+        );
 
-    assert(
-        results[0].size() == 2
-    );
+        orders_tree.insert(
+            Row{
+                Value(int64_t(3)),
+                Value(int64_t(2)),
+                Value(double(5.0))
+            }
+        );
 
+        TableSchema orders_schema;
 
-    assert(
-        std::get<int64_t>(
-            results[0][0]
-        ) == 2
-    );
+        orders_schema.name = "orders";
+        orders_schema.primary_key = "id";
+        orders_schema.root_page_id =
+            static_cast<int>(orders_tree.root_page_id());
 
+        addColumn(
+            orders_schema,
+            "id",
+            DataType::INTEGER,
+            0,
+            true
+        );
 
-    assert(
-        std::get<std::string>(
-            results[0][1]
-        ) == "Bob"
-    );
+        addColumn(
+            orders_schema,
+            "user_id",
+            DataType::INTEGER,
+            1
+        );
 
+        addColumn(
+            orders_schema,
+            "total",
+            DataType::REAL,
+            2
+        );
 
-    std::cout
-        << "[12] Result is correct.\n";
+        catalog.add_table(
+            std::move(orders_schema)
+        );
 
+        pager.flush_all();
 
-    std::cout
-        << "IndexScan runtime integration test passed.\n";
+        const std::string sql =
+            "SELECT user_id, COUNT(*) "
+            "FROM orders "
+            "GROUP BY user_id "
+            "HAVING COUNT(*) > 1";
 
+        std::vector<Row> results =
+            executeSql(
+                sql,
+                pager,
+                catalog
+            );
 
-    std::cout
-        << "Result count: "
-        << results.size()
-        << "\n";
+        assert(results.size() == 1);
+        assert(results[0].size() == 2);
 
+        assert(getInt(results[0][0]) == 1);
+        assert(getInt(results[0][1]) == 2);
 
-    std::cout
-        << "Row: "
-        << std::get<int64_t>(
-               results[0][0]
-           )
-        << " "
-        << std::get<std::string>(
-               results[0][1]
-           )
-        << "\n";
+        std::cout
+            << "GROUP BY + HAVING runtime integration test passed.\n";
+    }
 
 
     // ========================================================================
-    // 13. Cleanup
+    // 12. Cleanup
     // ========================================================================
 
     pager.flush_all();
 
     std::remove(db_file);
+
+    std::cout
+        << "\nAll runtime integration tests passed.\n";
 
     return 0;
 }
