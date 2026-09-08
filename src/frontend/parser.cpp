@@ -520,14 +520,16 @@ SelectStmt Parser::parseSelect() {
         stmt.order_by = std::move(items);
     }
 
-    // ── LIMIT ─────────────────────────────────────────────────────────────────
     if (match(TokenType::LIMIT)) {
         const Token& lit =
             expect(TokenType::INTEGER_LITERAL,
                    "after LIMIT");
 
-        stmt.limit =
-            std::stoll(lit.lexeme);
+        long long limit_val = std::stoll(lit.lexeme);
+        if (limit_val < 0) {
+            throw std::runtime_error("Parser error: LIMIT must not be negative");
+        }
+        stmt.limit = limit_val;
     }
 
     return stmt;
@@ -580,19 +582,7 @@ JoinClause Parser::parseJoinClause() {
 OrderByItem Parser::parseOrderByItem() {
     OrderByItem item;
 
-    // Support qualified names (table.column) in ORDER BY
-    item.column =
-        expect(TokenType::IDENTIFIER,
-               "in ORDER BY").lexeme;
-
-    if (peek().type == TokenType::DOT) {
-        advance();
-
-        item.column +=
-            "." +
-            expect(TokenType::IDENTIFIER,
-                   "after '.' in ORDER BY column").lexeme;
-    }
+    item.expr = parseExpr();
 
     item.ascending = true;
 

@@ -195,8 +195,8 @@ struct JoinClause {
 
 // ── ORDER BY item ─────────────────────────────────────────────────────────────
 struct OrderByItem {
-    std::string column;
-    bool        ascending = true; // false → DESC
+    Expr expr;
+    bool ascending = true; // false → DESC
 };
 
 // ── Statement node types ─────────────────────────────────────────────────────

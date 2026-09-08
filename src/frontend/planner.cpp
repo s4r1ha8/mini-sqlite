@@ -78,13 +78,24 @@ std::unique_ptr<OperatorNode> Planner::plan(const SelectStmt& stmt) {
     }
     // 4. Wrap with Sort if ORDER BY is present
     if (stmt.order_by.has_value()) {
+        std::vector<OrderByItem> cloned_order_by;
+        cloned_order_by.reserve(stmt.order_by->size());
+        for (const auto& item : *stmt.order_by) {
+            cloned_order_by.push_back({cloneExpr(item.expr), item.ascending});
+        }
         root = std::make_unique<OperatorNode>(
-            SortOp{ std::move(root), *stmt.order_by });
+            SortOp{ std::move(root), std::move(cloned_order_by) });
     }
 
     // 5. Always wrap with Project (selects requested columns / handles *)
     root = std::make_unique<OperatorNode>(
         ProjectOp{ std::move(root), stmt.columns });
+
+    // 6. Wrap with Limit if LIMIT is present
+    if (stmt.limit.has_value()) {
+        root = std::make_unique<OperatorNode>(
+            LimitOp{ std::move(root), *stmt.limit });
+    }
 
     return root;
 }
@@ -269,7 +280,7 @@ static std::string printNode(const OperatorNode& node,
             out << connector << "Sort([";
             for (size_t i = 0; i < op.order_by.size(); ++i) {
                 if (i) out << ", ";
-                out << op.order_by[i].column
+                out << Planner::exprToString(op.order_by[i].expr)
                     << (op.order_by[i].ascending ? " ASC" : " DESC");
             }
             out << "])\n";
@@ -303,6 +314,10 @@ static std::string printNode(const OperatorNode& node,
             printChild(*op.left,  "├─ ", childIndent + "│  ");
             // Right child: last child → use "└─ " and "   " indent.
             printChild(*op.right, "└─ ", childIndent + "   ");
+        }
+        else if constexpr (std::is_same_v<T, LimitOp>) {
+            out << connector << "Limit(" << op.limit_count << ")\n";
+            printChild(*op.child, "└─ ", childIndent + "   ");
         }
     }, node.v);  // note: node.v, not node (OperatorNode is a wrapper struct)
 

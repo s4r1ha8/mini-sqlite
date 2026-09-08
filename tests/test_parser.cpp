@@ -476,7 +476,7 @@ static void testSelectOrderBy() {
     );
 
     CHECK(
-        ob[0].column == "name",
+        std::get<ColumnRef>(ob[0].expr.node).column == "name",
         "order 0: name"
     );
 
@@ -486,7 +486,7 @@ static void testSelectOrderBy() {
     );
 
     CHECK(
-        ob[1].column == "id",
+        std::get<ColumnRef>(ob[1].expr.node).column == "id",
         "order 1: id"
     );
 

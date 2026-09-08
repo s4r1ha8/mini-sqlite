@@ -22,6 +22,7 @@
 #include "exec/index_scan.h"
 #include "exec/nested_loop_join.h"
 #include "exec/aggregate.h"
+#include "exec/limit.h"
 
 // ============================================================================
 // Runtime Project operator
@@ -315,41 +316,16 @@ private:
             );
         }
 
-        std::vector<SortKey> keys;
-        keys.reserve(
-            op.order_by.size()
-        );
-
-        for (const auto& item :
-             op.order_by) {
-
-            int ordinal =
-                findColumnOrdinal(
-                    *schema,
-                    item.column
-                );
-
-            if (ordinal < 0) {
-                throw std::runtime_error(
-                    "ExecutorAdapter: ORDER BY column '" +
-                    item.column +
-                    "' not found"
-                );
-            }
-
-            keys.push_back(
-                SortKey{
-                    static_cast<size_t>(
-                        ordinal
-                    ),
-                    !item.ascending
-                }
-            );
+        std::vector<OrderByItem> cloned_order_by;
+        cloned_order_by.reserve(op.order_by.size());
+        for (const auto& item : op.order_by) {
+            cloned_order_by.push_back({cloneExpr(item.expr), item.ascending});
         }
 
         return std::make_unique<Sort>(
             std::move(child),
-            std::move(keys)
+            std::move(cloned_order_by),
+            std::move(schema)
         );
     }
 
@@ -438,6 +414,21 @@ private:
         );
     }
 
+    // ========================================================================
+    // Limit
+    // ========================================================================
+
+    OperatorPtr buildNode(
+        const LimitOp& op
+    ) {
+        OperatorPtr child =
+            build(*op.child);
+
+        return std::make_unique<Limit>(
+            std::move(child),
+            op.limit_count
+        );
+    }
 
     // ========================================================================
     // Aggregate

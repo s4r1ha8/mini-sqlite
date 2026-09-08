@@ -363,55 +363,17 @@ void SemanticAnalyzer::analyzeSelect(const SelectStmt& stmt) {
         analyzeExpr(*stmt.having, tables);
     }
 
-    // Validate ORDER BY columns
+    // Validate ORDER BY expressions
     if (stmt.order_by.has_value()) {
         for (const auto& item : *stmt.order_by) {
-            auto dot = item.column.find('.');
-
-            std::string tbl;
-            std::string col;
-
-            if (dot == std::string::npos) {
-                col = item.column;
-
-                bool found = false;
-
-                for (const auto& [alias, realName] : tables) {
-                    if (catalog_.column_exists(realName, col)) {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    throw SemanticError(
-                        "ORDER BY: column '" + col +
-                        "' does not exist in any referenced table.");
-                }
-
-            } else {
-                tbl = item.column.substr(0, dot);
-                col = item.column.substr(dot + 1);
-
-                if (!tables.count(tbl)) {
-                    throw SemanticError(
-                        "ORDER BY: unknown table alias '" + tbl + "'.");
-                }
-
-                if (!catalog_.column_exists(tables.at(tbl), col)) {
-                    throw SemanticError(
-                        "ORDER BY: column '" + col +
-                        "' does not exist in table '" +
-                        tables.at(tbl) + "'.");
-                }
-            }
+            analyzeExpr(item.expr, tables);
         }
     }
 
     // Validate LIMIT
-    if (stmt.limit.has_value() && *stmt.limit <= 0) {
+    if (stmt.limit.has_value() && *stmt.limit < 0) {
         throw SemanticError(
-            "LIMIT must be a positive integer (got " +
+            "LIMIT must be a non-negative integer (got " +
             std::to_string(*stmt.limit) + ").");
     }
 }

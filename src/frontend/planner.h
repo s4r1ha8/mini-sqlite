@@ -85,6 +85,12 @@ struct ProjectOp {
     std::vector<std::string>        columns; // ["*"] or qualified column names
 };
 
+// Limit — return at most limit_count rows.
+struct LimitOp {
+    std::unique_ptr<OperatorNode> child;
+    int64_t                       limit_count;
+};
+
 // ── Binary operator (two children) ───────────────────────────────────────────
 
 // NestedLoopJoin — for each row from left, re-scan right, emit condition matches.
@@ -109,7 +115,8 @@ struct OperatorNode {
         NestedLoopJoinOp,
         SortOp,
         AggregateOp,
-        ProjectOp
+        ProjectOp,
+        LimitOp
     > v;
 
     // Converting constructor: OperatorNode(SeqScanOp{…}) works directly.
