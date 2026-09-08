@@ -627,7 +627,7 @@ static void testSelectAggregate() {
 
         CHECK(
             sel.columns.size() == 1 &&
-            sel.columns[0] == "COUNT(...)",
+            sel.columns[0] == "COUNT(id)",
             "aggregate in select list: COUNT column projection"
         );
 

@@ -237,6 +237,22 @@ struct SelectStmt {
     std::optional<std::vector<OrderByItem>>  order_by;
     std::optional<int64_t>                   limit;
 };
+struct Assignment {
+    std::string column;
+    Expr        value;
+};
+
+struct UpdateStmt {
+    std::string             table_name;
+    std::vector<Assignment> updates;
+    std::optional<Expr>     where;
+};
+
+struct DeleteStmt {
+    std::string         table_name;
+    std::optional<Expr> where;
+};
+
 struct TxnStmt {
     enum class Kind { BEGIN, COMMIT, ROLLBACK } kind;
 };
@@ -247,5 +263,7 @@ using Statement = std::variant<
     CreateIndexStmt,
     InsertStmt,
     SelectStmt,
+    UpdateStmt,
+    DeleteStmt,
     TxnStmt
 >;

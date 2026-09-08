@@ -1,0 +1,6 @@
+test_tokenizer 2 0.0048002
+test_parser 1 0.0456955
+test_catalog 2 0.0058897
+test_sema 2 0.00521025
+test_planner 2 0.00511295
+---
