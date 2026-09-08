@@ -579,6 +579,118 @@ static void testCreateIndexMissingColumn() {
 }
 
 // ============================================================================
+// UPDATE
+// ============================================================================
+
+static void testUpdateOk() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeOk(
+            cat,
+            "UPDATE users SET name = 'Y' WHERE id = 1"
+        ),
+        "valid UPDATE ok"
+    );
+}
+
+static void testUpdateMissingTable() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeThrows(
+            cat,
+            "UPDATE ghosts SET name = 'Y'"
+        ),
+        "UPDATE on missing table throws"
+    );
+}
+
+static void testUpdateMissingColumn() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeThrows(
+            cat,
+            "UPDATE users SET fake_column = 'Y'"
+        ),
+        "UPDATE on missing column throws"
+    );
+}
+
+static void testUpdateMissingWhereColumn() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeThrows(
+            cat,
+            "UPDATE users SET name = 'Y' WHERE fake_column = 1"
+        ),
+        "UPDATE with missing column in WHERE throws"
+    );
+}
+
+static void testUpdateDuplicateSetColumn() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeThrows(
+            cat,
+            "UPDATE users SET name = 'Y', name = 'Z'"
+        ),
+        "UPDATE with duplicate SET columns throws"
+    );
+}
+
+// ============================================================================
+// DELETE
+// ============================================================================
+
+static void testDeleteOk() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeOk(
+            cat,
+            "DELETE FROM users WHERE id = 1"
+        ),
+        "valid DELETE ok"
+    );
+
+    CHECK(
+        analyzeOk(
+            cat,
+            "DELETE FROM users"
+        ),
+        "valid DELETE without WHERE ok"
+    );
+}
+
+static void testDeleteMissingTable() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeThrows(
+            cat,
+            "DELETE FROM ghosts"
+        ),
+        "DELETE from missing table throws"
+    );
+}
+
+static void testDeleteMissingWhereColumn() {
+    auto cat = buildCatalog();
+
+    CHECK(
+        analyzeThrows(
+            cat,
+            "DELETE FROM users WHERE fake_column = 1"
+        ),
+        "DELETE with missing column in WHERE throws"
+    );
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -608,6 +720,16 @@ int main() {
     testCreateIndexOk();
     testCreateIndexMissingTable();
     testCreateIndexMissingColumn();
+
+    testUpdateOk();
+    testUpdateMissingTable();
+    testUpdateMissingColumn();
+    testUpdateMissingWhereColumn();
+    testUpdateDuplicateSetColumn();
+
+    testDeleteOk();
+    testDeleteMissingTable();
+    testDeleteMissingWhereColumn();
 
     std::cout
         << "Sema: "

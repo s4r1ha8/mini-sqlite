@@ -5,6 +5,7 @@
 #include "frontend/sema.h"
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 SemanticAnalyzer::SemanticAnalyzer(Catalog& catalog) : catalog_(catalog) {}
 
@@ -17,6 +18,8 @@ void SemanticAnalyzer::analyze(const Statement& stmt) {
         else if constexpr (std::is_same_v<T, CreateIndexStmt>) analyzeCreateIndex(s);
         else if constexpr (std::is_same_v<T, InsertStmt>)      analyzeInsert(s);
         else if constexpr (std::is_same_v<T, SelectStmt>)      analyzeSelect(s);
+        else if constexpr (std::is_same_v<T, UpdateStmt>)      analyzeUpdate(s);
+        else if constexpr (std::is_same_v<T, DeleteStmt>)      analyzeDelete(s);
         else if constexpr (std::is_same_v<T, TxnStmt>)         { /* nothing to validate */ }
     }, stmt);
 }
@@ -158,7 +161,59 @@ void SemanticAnalyzer::analyzeInsert(const InsertStmt& stmt) {
     }
 }
 
+// ── UPDATE ────────────────────────────────────────────────────────────────────
+
+void SemanticAnalyzer::analyzeUpdate(const UpdateStmt& stmt) {
+    if (!catalog_.table_exists(stmt.table_name)) {
+        throw SemanticError(
+            "UPDATE: table '" + stmt.table_name + "' does not exist.");
+    }
+
+    std::unordered_map<std::string, std::string> tables = {
+        {stmt.table_name, stmt.table_name}
+    };
+
+    std::unordered_set<std::string> seen_columns;
+
+    for (const auto& assign : stmt.updates) {
+        if (!catalog_.column_exists(stmt.table_name, assign.column)) {
+            throw SemanticError(
+                "UPDATE: column '" + assign.column +
+                "' does not exist in table '" + stmt.table_name + "'.");
+        }
+
+        if (!seen_columns.insert(assign.column).second) {
+            throw SemanticError(
+                "UPDATE: duplicate column '" + assign.column + "' in SET clause.");
+        }
+
+        analyzeExpr(assign.value, tables);
+    }
+
+    if (stmt.where.has_value()) {
+        analyzeExpr(*stmt.where, tables);
+    }
+}
+
+// ── DELETE ────────────────────────────────────────────────────────────────────
+
+void SemanticAnalyzer::analyzeDelete(const DeleteStmt& stmt) {
+    if (!catalog_.table_exists(stmt.table_name)) {
+        throw SemanticError(
+            "DELETE: table '" + stmt.table_name + "' does not exist.");
+    }
+
+    std::unordered_map<std::string, std::string> tables = {
+        {stmt.table_name, stmt.table_name}
+    };
+
+    if (stmt.where.has_value()) {
+        analyzeExpr(*stmt.where, tables);
+    }
+}
+
 // ── SELECT ────────────────────────────────────────────────────────────────────
+
 
 void SemanticAnalyzer::analyzeSelect(const SelectStmt& stmt) {
     // Build alias → real_table_name map for all referenced tables
