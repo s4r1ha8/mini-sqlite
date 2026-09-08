@@ -44,6 +44,35 @@ public:
         return std::get<int64_t>((*result)[1]); // col[1] is the PK
     }
 
+    // Remove an index_val -> pk mapping.
+    // Handles duplicate index_vals correctly by explicitly matching the PK.
+    static void remove_entry(Pager& pager, PageId idx_root,
+                             const Value& indexed_val, int64_t pk) {
+        int64_t key = value_to_key(indexed_val);
+        BTreeCursor cursor(pager, idx_root, 2);
+
+        if (cursor.seek(key)) {
+            // Seek finds the first row >= key.
+            // Loop forward while the key matches our indexed_val's key.
+            while (!cursor.is_exhausted()) {
+                Row r = cursor.current();
+                int64_t cur_key = std::get<int64_t>(r[0]);
+                
+                if (cur_key != key) {
+                    break; // Moved past the matching keys
+                }
+
+                int64_t cur_pk = std::get<int64_t>(r[1]);
+                if (cur_pk == pk) {
+                    cursor.delete_current_row();
+                    return; // Successfully removed
+                }
+
+                cursor.next();
+            }
+        }
+    }
+
 private:
     // Convert any Value to an int64 key.
     // Integers: used directly.
