@@ -85,6 +85,10 @@ public:
 
     bool is_exhausted() const { return exhausted_; }
 
+    // Return the current root page id (may change after insert due to splits).
+    // The engine layer reads this after every insert to detect root propagation.
+    PageId root_page_id() const { return root_page_id_; }
+
 private:
     Pager&   pager_;
     PageId   root_page_id_;

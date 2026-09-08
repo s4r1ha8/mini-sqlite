@@ -4,7 +4,7 @@ project(mini_sqlite CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── Library: all frontend + common sources (shared by main and tests) ─────────
+# ── Library: all frontend + common + storage + engine sources ─────────────────
 add_library(mini_sqlite_lib
     src/common/token.cpp
     src/common/eval.cpp
@@ -13,6 +13,8 @@ add_library(mini_sqlite_lib
     src/frontend/catalog.cpp
     src/frontend/sema.cpp
     src/frontend/planner.cpp
+    src/storage/pager.cpp
+    src/engine/db_engine.cpp
 )
 target_include_directories(mini_sqlite_lib PUBLIC src)
 
@@ -36,6 +38,7 @@ add_test_exe(test_sema      tests/test_sema.cpp)
 add_test_exe(test_planner   tests/test_planner.cpp)
 
 
+# integration_runtime_test: links mini_sqlite_lib (which now includes pager.cpp)
 add_executable(integration_runtime_test integration_compile_test.cpp)
 
 target_link_libraries(
@@ -44,8 +47,3 @@ target_link_libraries(
     mini_sqlite_lib
 )
 
-target_sources(
-    integration_runtime_test
-    PRIVATE
-    src/storage/pager.cpp
-)
