@@ -62,6 +62,8 @@ private:
     CreateIndexStmt parseCreateIndex();
     InsertStmt      parseInsert();
     SelectStmt      parseSelect();
+    UpdateStmt      parseUpdate();
+    DeleteStmt      parseDelete();
     TxnStmt         parseTxn(TxnStmt::Kind kind);
 
     // ── Clause parsers ───────────────────────────────────────────────────────

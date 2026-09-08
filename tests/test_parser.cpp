@@ -772,6 +772,65 @@ static void testSemicolon() {
 }
 
 
+// ── UPDATE ────────────────────────────────────────────────────────────────────
+
+static void testUpdate() {
+    {
+        auto stmt = parse("UPDATE users SET age = 25;");
+        const auto& upd = std::get<UpdateStmt>(stmt);
+        CHECK(upd.table_name == "users", "update table name");
+        CHECK(upd.updates.size() == 1, "update single assignment");
+        CHECK(upd.updates[0].column == "age", "update assignment column");
+        CHECK(!upd.where.has_value(), "update without where");
+    }
+
+    {
+        auto stmt = parse("UPDATE users SET age = 25 WHERE id = 1;");
+        const auto& upd = std::get<UpdateStmt>(stmt);
+        CHECK(upd.table_name == "users", "update table name with where");
+        CHECK(upd.updates.size() == 1, "update single assignment with where");
+        CHECK(upd.updates[0].column == "age", "update assignment column with where");
+        CHECK(upd.where.has_value(), "update with where");
+    }
+
+    {
+        auto stmt = parse("UPDATE users SET age = 25, name = 'Alice' WHERE id = 1;");
+        const auto& upd = std::get<UpdateStmt>(stmt);
+        CHECK(upd.updates.size() == 2, "update multiple assignments");
+        CHECK(upd.updates[0].column == "age", "update assign 1");
+        CHECK(upd.updates[1].column == "name", "update assign 2");
+        CHECK(upd.where.has_value(), "update multi assign with where");
+    }
+
+    CHECK(throwsParseError("UPDATE;"), "update missing table");
+    CHECK(throwsParseError("UPDATE users;"), "update missing set");
+    CHECK(throwsParseError("UPDATE users SET;"), "update missing assignment");
+    CHECK(throwsParseError("UPDATE users SET age;"), "update missing equals");
+    CHECK(throwsParseError("UPDATE users SET = 25;"), "update missing column");
+}
+
+// ── DELETE ────────────────────────────────────────────────────────────────────
+
+static void testDelete() {
+    {
+        auto stmt = parse("DELETE FROM users;");
+        const auto& del = std::get<DeleteStmt>(stmt);
+        CHECK(del.table_name == "users", "delete table name");
+        CHECK(!del.where.has_value(), "delete without where");
+    }
+
+    {
+        auto stmt = parse("DELETE FROM users WHERE id = 1;");
+        const auto& del = std::get<DeleteStmt>(stmt);
+        CHECK(del.table_name == "users", "delete table name with where");
+        CHECK(del.where.has_value(), "delete with where");
+    }
+
+    CHECK(throwsParseError("DELETE;"), "delete missing from");
+    CHECK(throwsParseError("DELETE users;"), "delete missing from keyword");
+    CHECK(throwsParseError("DELETE FROM;"), "delete missing table");
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -797,6 +856,9 @@ int main() {
     testSelectQualifiedColumn();
     testSelectLimit();
     testSelectAggregate();
+
+    testUpdate();
+    testDelete();
 
     testTxn();
     testSemicolon();

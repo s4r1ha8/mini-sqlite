@@ -100,6 +100,14 @@ Statement Parser::parseStatement() {
             advance();
             return parseSelect();
 
+        case TokenType::UPDATE:
+            advance();
+            return parseUpdate();
+
+        case TokenType::DELETE:
+            advance();
+            return parseDelete();
+
         case TokenType::BEGIN:
             advance();
             return parseTxn(TxnStmt::Kind::BEGIN);
@@ -114,7 +122,7 @@ Statement Parser::parseStatement() {
 
         default:
             throw ParseError(
-                "Expected a statement keyword (SELECT, INSERT, CREATE, BEGIN, "
+                "Expected a statement keyword (SELECT, INSERT, UPDATE, DELETE, CREATE, BEGIN, "
                 "COMMIT, ROLLBACK) but got '" + t.lexeme +
                 "' at line " + std::to_string(t.line));
     }
@@ -264,6 +272,62 @@ InsertStmt Parser::parseInsert() {
 
     expect(TokenType::RPAREN,
            "after value list in INSERT");
+
+    return stmt;
+}
+
+// ── UPDATE ────────────────────────────────────────────────────────────────────
+
+// update := "UPDATE" identifier "SET" identifier "=" expr ("," identifier "=" expr)* ("WHERE" expr)?
+
+UpdateStmt Parser::parseUpdate() {
+    UpdateStmt stmt;
+
+    stmt.table_name =
+        expect(TokenType::IDENTIFIER,
+               "as table name after UPDATE").lexeme;
+
+    expect(TokenType::SET,
+           "after table name in UPDATE");
+
+    do {
+        Assignment assign;
+        assign.column =
+            expect(TokenType::IDENTIFIER,
+                   "as column name in SET clause").lexeme;
+
+        expect(TokenType::EQUALS,
+               "after column name in SET clause");
+
+        assign.value = parseExpr();
+
+        stmt.updates.push_back(std::move(assign));
+    } while (match(TokenType::COMMA));
+
+    if (match(TokenType::WHERE)) {
+        stmt.where = parseExpr();
+    }
+
+    return stmt;
+}
+
+// ── DELETE ────────────────────────────────────────────────────────────────────
+
+// delete := "DELETE" "FROM" identifier ("WHERE" expr)?
+
+DeleteStmt Parser::parseDelete() {
+    DeleteStmt stmt;
+
+    expect(TokenType::FROM,
+           "after DELETE");
+
+    stmt.table_name =
+        expect(TokenType::IDENTIFIER,
+               "as table name after DELETE FROM").lexeme;
+
+    if (match(TokenType::WHERE)) {
+        stmt.where = parseExpr();
+    }
 
     return stmt;
 }

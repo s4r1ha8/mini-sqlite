@@ -1,18 +1,18 @@
-Start testing: Sep 08 18:09 India Standard Time
+Start testing: Sep 08 18:30 India Standard Time
 ----------------------------------------------------------
 1/5 Testing: test_tokenizer
 1/5 Test: test_tokenizer
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_tokenizer.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_tokenizer" start time: Sep 08 18:09 India Standard Time
+"test_tokenizer" start time: Sep 08 18:30 India Standard Time
 Output:
 ----------------------------------------------------------
 Tokenizer: 67 passed, 0 failed.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.05 sec
 ----------------------------------------------------------
 Test Passed.
-"test_tokenizer" end time: Sep 08 18:09 India Standard Time
+"test_tokenizer" end time: Sep 08 18:30 India Standard Time
 "test_tokenizer" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -20,15 +20,15 @@ Test Passed.
 2/5 Test: test_parser
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_parser.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_parser" start time: Sep 08 18:09 India Standard Time
+"test_parser" start time: Sep 08 18:30 India Standard Time
 Output:
 ----------------------------------------------------------
-Parser: 80 passed, 0 failed.
+Parser: 104 passed, 0 failed.
 <end of output>
 Test time =   0.05 sec
 ----------------------------------------------------------
 Test Passed.
-"test_parser" end time: Sep 08 18:09 India Standard Time
+"test_parser" end time: Sep 08 18:30 India Standard Time
 "test_parser" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -36,15 +36,15 @@ Test Passed.
 3/5 Test: test_catalog
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_catalog.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_catalog" start time: Sep 08 18:09 India Standard Time
+"test_catalog" start time: Sep 08 18:30 India Standard Time
 Output:
 ----------------------------------------------------------
 Catalog: 27 passed, 0 failed.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.05 sec
 ----------------------------------------------------------
 Test Passed.
-"test_catalog" end time: Sep 08 18:09 India Standard Time
+"test_catalog" end time: Sep 08 18:30 India Standard Time
 "test_catalog" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -52,15 +52,15 @@ Test Passed.
 4/5 Test: test_sema
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_sema.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_sema" start time: Sep 08 18:09 India Standard Time
+"test_sema" start time: Sep 08 18:30 India Standard Time
 Output:
 ----------------------------------------------------------
 Sema: 34 passed, 0 failed.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.05 sec
 ----------------------------------------------------------
 Test Passed.
-"test_sema" end time: Sep 08 18:09 India Standard Time
+"test_sema" end time: Sep 08 18:30 India Standard Time
 "test_sema" time elapsed: 00:00:00
 ----------------------------------------------------------
 
@@ -68,16 +68,16 @@ Test Passed.
 5/5 Test: test_planner
 Command: "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/Debug/test_planner.exe"
 Directory: D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build
-"test_planner" start time: Sep 08 18:09 India Standard Time
+"test_planner" start time: Sep 08 18:30 India Standard Time
 Output:
 ----------------------------------------------------------
 Planner: 39 passed, 0 failed.
 <end of output>
-Test time =   0.01 sec
+Test time =   0.04 sec
 ----------------------------------------------------------
 Test Passed.
-"test_planner" end time: Sep 08 18:09 India Standard Time
+"test_planner" end time: Sep 08 18:30 India Standard Time
 "test_planner" time elapsed: 00:00:00
 ----------------------------------------------------------
 
-End testing: Sep 08 18:09 India Standard Time
+End testing: Sep 08 18:30 India Standard Time

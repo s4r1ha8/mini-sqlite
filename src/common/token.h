@@ -8,6 +8,7 @@
 enum class TokenType {
     // ── Keywords ────────────────────────────────────────────────────────────
     SELECT, FROM, WHERE, INSERT, INTO, VALUES,
+    UPDATE, SET, DELETE,
     CREATE, TABLE, INDEX, ON, JOIN,
     AND, OR, NOT,
     ORDER, BY, GROUP, HAVING,          // HAVING reserved for M2 GROUP BY
