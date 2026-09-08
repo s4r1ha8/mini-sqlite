@@ -39,7 +39,21 @@ void DatabaseEngine::execute(const std::string& sql) {
     SemanticAnalyzer sema(catalog_);
     sema.analyze(stmt);
 
-    executeParsed(stmt);
+    // Run the statement.  If it throws and we were in an auto-started
+    // transaction (not an explicit BEGIN), roll back to leave the engine in a
+    // clean state for the next statement.  Explicit transactions are left open
+    // so the caller can issue ROLLBACK themselves.
+    try {
+        executeParsed(stmt);
+    } catch (...) {
+        if (active_txn_.has_value() && !explicit_txn_) {
+            // Auto-transaction: roll back silently and clear state.
+            try { txn_mgr_.rollback(*active_txn_); } catch (...) {}
+            active_txn_  = std::nullopt;
+            explicit_txn_ = false;
+        }
+        throw;  // re-propagate so the REPL can print the error
+    }
 }
 
 // ── Public: dot commands ─────────────────────────────────────────────────────
@@ -159,6 +173,9 @@ void DatabaseEngine::auto_commit() {
         txn_mgr_.commit(*active_txn_);
         active_txn_ = std::nullopt;
         explicit_txn_ = false;
+        // Save catalog only when we actually commit.  During an explicit
+        // transaction, save_catalog() is deferred to executeTxn(COMMIT).
+        save_catalog();
     }
 }
 
@@ -209,9 +226,6 @@ void DatabaseEngine::executeCreateTable(const CreateTableStmt& stmt) {
 
     // 5. Commit (WAL COMMIT record + pager flush_all)
     auto_commit();
-
-    // 6. Save catalog to page 0 (direct, outside WAL)
-    save_catalog();
 
     std::cout << "[DDL] CREATE TABLE " << stmt.table_name
               << " (root_page=" << root << ")\n";
@@ -265,7 +279,6 @@ void DatabaseEngine::executeCreateIndex(const CreateIndexStmt& stmt) {
     idx_info->root_page_id = static_cast<int>(idx_root);
 
     auto_commit();
-    save_catalog();
 
     std::cout << "[DDL] CREATE INDEX " << stmt.index_name
               << " ON " << stmt.table_name
@@ -342,7 +355,6 @@ void DatabaseEngine::executeInsert(const InsertStmt& stmt) {
     }
 
     auto_commit();
-    save_catalog();
 
     std::cout << "[DML] INSERT INTO " << stmt.table_name << " -> OK\n";
 }
@@ -408,7 +420,6 @@ void DatabaseEngine::executeDelete(const DeleteStmt& stmt) {
     }
 
     auto_commit();
-    save_catalog();
 
     std::cout << "[DML] DELETE FROM " << stmt.table_name << " -> " << candidate_rows.size() << " rows deleted\n";
 }
@@ -486,7 +497,6 @@ void DatabaseEngine::executeUpdate(const UpdateStmt& stmt) {
 
     if (candidate_rows.empty()) {
         auto_commit();
-        save_catalog();
         std::cout << "[DML] UPDATE " << stmt.table_name << " -> 0 rows updated\n";
         return;
     }
@@ -652,7 +662,6 @@ void DatabaseEngine::executeUpdate(const UpdateStmt& stmt) {
     }
 
     auto_commit();
-    save_catalog();
 
     std::cout << "[DML] UPDATE " << stmt.table_name << " -> " << rows_updated << " rows updated\n";
 }

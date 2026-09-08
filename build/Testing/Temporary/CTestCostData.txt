@@ -1,7 +1,7 @@
-test_tokenizer 13 0.00392052
-test_parser 12 0.00369905
-test_catalog 13 0.00363555
-test_sema 13 0.00357436
-test_planner 13 0.00355419
-test_storage 6 0.0106013
+test_tokenizer 14 0.0031854
+test_parser 13 0.00205521
+test_catalog 14 0.00341681
+test_sema 14 0.00369008
+test_planner 14 0.00356716
+test_storage 7 0.00882717
 ---

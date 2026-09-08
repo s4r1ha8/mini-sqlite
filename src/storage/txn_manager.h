@@ -47,6 +47,13 @@ public:
     // ── Write a page within a transaction ──
     // Call this BEFORE modifying the page.
     // Logs before+after images to WAL, then applies the new bytes to the page.
+    //
+    // IMPORTANT — first-write-wins deduplication:
+    //   Only the FIRST snapshot of each page per transaction is kept as the
+    //   rollback before-image.  Subsequent writes to the same page within the
+    //   same transaction update the WAL record (for crash-recovery) but do NOT
+    //   overwrite the original before-image, because ROLLBACK must restore the
+    //   page to its state at BEGIN, not its state between two DML statements.
     void write_page(TxnId tid, PageId page_id,
                     const std::array<std::byte, PAGE_SIZE>& after_bytes) {
         if (active_txns_.find(tid) == active_txns_.end()) {
@@ -64,8 +71,14 @@ public:
         page->data = after_bytes;
         pager_.mark_dirty(page_id);
 
-        // Track which pages this transaction touched (for rollback)
-        txn_pages_[tid].push_back({page_id, before});
+        // Track which pages this transaction touched (for rollback).
+        // Only record the FIRST before-image for each page — subsequent writes
+        // in the same txn must not overwrite the original pre-BEGIN image.
+        auto& seen = txn_first_seen_[tid];
+        if (seen.find(page_id) == seen.end()) {
+            seen.insert(page_id);
+            txn_pages_[tid].push_back({page_id, before});
+        }
     }
 
     // ── COMMIT: make the transaction permanent ──
@@ -80,6 +93,7 @@ public:
         // Clean up
         active_txns_.erase(tid);
         txn_pages_.erase(tid);
+        txn_first_seen_.erase(tid);
     }
 
     // ── ROLLBACK: undo all writes for this transaction ──
@@ -101,6 +115,7 @@ public:
             pager_.flush_all();
             txn_pages_.erase(tid);
         }
+        txn_first_seen_.erase(tid);
         active_txns_.erase(tid);
     }
 
@@ -117,6 +132,11 @@ private:
     std::unordered_set<TxnId> active_txns_;
 
     // Pages touched by each transaction: (page_id, before_image)
+    // Only the FIRST before-image per page per txn is stored (see write_page).
     std::unordered_map<TxnId,
         std::vector<std::pair<PageId, std::array<std::byte, PAGE_SIZE>>>> txn_pages_;
+
+    // Tracks which pages have already had their first before-image captured
+    // within a given transaction, to implement first-write-wins deduplication.
+    std::unordered_map<TxnId, std::unordered_set<PageId>> txn_first_seen_;
 };
