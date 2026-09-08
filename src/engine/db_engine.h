@@ -96,6 +96,7 @@ private:
     void executeCreateTable(const CreateTableStmt& stmt);
     void executeCreateIndex(const CreateIndexStmt& stmt);
     void executeInsert(const InsertStmt& stmt);
+    void executeDelete(const DeleteStmt& stmt);
     void executeSelect(const SelectStmt& stmt);
     void executeTxn(const TxnStmt& stmt);
 

@@ -169,6 +169,7 @@ void DatabaseEngine::executeParsed(const Statement& stmt) {
         if      constexpr (std::is_same_v<T, CreateTableStmt>) executeCreateTable(s);
         else if constexpr (std::is_same_v<T, CreateIndexStmt>) executeCreateIndex(s);
         else if constexpr (std::is_same_v<T, InsertStmt>)      executeInsert(s);
+        else if constexpr (std::is_same_v<T, DeleteStmt>)      executeDelete(s);
         else if constexpr (std::is_same_v<T, SelectStmt>)      executeSelect(s);
         else if constexpr (std::is_same_v<T, TxnStmt>)         executeTxn(s);
     }, stmt);
@@ -342,6 +343,72 @@ void DatabaseEngine::executeInsert(const InsertStmt& stmt) {
     save_catalog();
 
     std::cout << "[DML] INSERT INTO " << stmt.table_name << " -> OK\n";
+}
+
+// ── DELETE ───────────────────────────────────────────────────────────────────
+
+void DatabaseEngine::executeDelete(const DeleteStmt& stmt) {
+    TableSchema* schema = catalog_.get_table(stmt.table_name);
+    if (!schema) {
+        throw std::runtime_error(
+            "DELETE: table '" + stmt.table_name + "' not in catalog");
+    }
+    if (schema->root_page_id < 0) {
+        throw std::runtime_error(
+            "DELETE: table '" + stmt.table_name + "' has no storage root");
+    }
+
+    TxnId tid = ensure_txn();
+
+    // 1. Snapshot ALL existing pages for rollback safety
+    uint32_t pages_before = pager_.page_count();
+    for (uint32_t pg = 1; pg < pages_before; pg++) {
+        Page* p = pager_.get_page(pg);
+        txn_mgr_.write_page(tid, pg, p->data);
+    }
+
+    // 2. Build dummy SelectStmt to reuse Planner/Executor for WHERE evaluation
+    SelectStmt dummy_sel;
+    dummy_sel.from.push_back({stmt.table_name, ""});
+    dummy_sel.columns.push_back("*");
+    if (stmt.where) {
+        dummy_sel.where = cloneExpr(*stmt.where);
+    }
+
+    Planner planner(catalog_);
+    std::unique_ptr<OperatorNode> plan = planner.plan(dummy_sel);
+    ExecutorAdapter adapter(pager_, catalog_);
+    OperatorPtr root = adapter.build(*plan);
+
+    // 3. Scan Phase: Collect all candidate rows
+    root->open();
+    std::vector<Row> candidate_rows;
+    while (auto row = root->next()) {
+        candidate_rows.push_back(*row);
+    }
+
+    // 4. Mutation Phase
+    for (const auto& row : candidate_rows) {
+        int64_t pk = std::get<int64_t>(row[0]);
+
+        // Remove secondary index entries
+        for (const auto& idx : schema->indexes) {
+            int col_ord = catalog_.column_ordinal(stmt.table_name, idx.column);
+            if (col_ord < 0) continue;
+            const Value& indexed_val = row[static_cast<size_t>(col_ord)];
+            IndexManager::remove_entry(pager_, static_cast<PageId>(idx.root_page_id), indexed_val, pk);
+        }
+
+        // Delete main table row
+        BTreeCursor cursor(pager_, static_cast<PageId>(schema->root_page_id), schema->columns.size());
+        cursor.seek(pk);
+        cursor.delete_current_row();
+    }
+
+    auto_commit();
+    save_catalog();
+
+    std::cout << "[DML] DELETE FROM " << stmt.table_name << " -> " << candidate_rows.size() << " rows deleted\n";
 }
 
 // ── SELECT ────────────────────────────────────────────────────────────────────
