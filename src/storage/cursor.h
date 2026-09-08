@@ -34,7 +34,24 @@ public:
         }
         current_page_id_ = leaf_id;
         current_slot_    = lo;
-        exhausted_       = (lo >= n);
+        
+        if (current_slot_ >= node.num_keys()) {
+            PageId next_page = node.next_leaf();
+            while (next_page != NO_PAGE) {
+                current_page_id_ = next_page;
+                current_slot_    = 0;
+                Page* np = pager_.get_page(next_page);
+                BTreeNode nn(np);
+                if (nn.num_keys() > 0) {
+                    exhausted_ = false;
+                    return false;
+                }
+                next_page = nn.next_leaf();
+            }
+            exhausted_ = true;
+        } else {
+            exhausted_ = false;
+        }
         return false;
     }
 
@@ -45,13 +62,16 @@ public:
         current_slot_++;
         if (current_slot_ < node.num_keys()) return true;
         PageId next_page = node.next_leaf();
-        if (next_page == NO_PAGE) { exhausted_ = true; return false; }
-        current_page_id_ = next_page;
-        current_slot_    = 0;
-        Page* np = pager_.get_page(next_page);
-        BTreeNode nn(np);
-        if (nn.num_keys() == 0) { exhausted_ = true; return false; }
-        return true;
+        while (next_page != NO_PAGE) {
+            current_page_id_ = next_page;
+            current_slot_    = 0;
+            Page* np = pager_.get_page(next_page);
+            BTreeNode nn(np);
+            if (nn.num_keys() > 0) return true;
+            next_page = nn.next_leaf();
+        }
+        exhausted_ = true;
+        return false;
     }
 
     Row current() override {
@@ -133,17 +153,15 @@ public:
 
         if (current_slot_ >= node.num_keys()) {
             PageId next_page = node.next_leaf();
-            if (next_page == NO_PAGE) {
-                exhausted_ = true;
-            } else {
+            while (next_page != NO_PAGE) {
                 current_page_id_ = next_page;
                 current_slot_    = 0;
                 Page* np = pager_.get_page(next_page);
                 BTreeNode nn(np);
-                if (nn.num_keys() == 0) {
-                    exhausted_ = true;
-                }
+                if (nn.num_keys() > 0) return;
+                next_page = nn.next_leaf();
             }
+            exhausted_ = true;
         }
     }
 
@@ -157,6 +175,12 @@ public:
         current_slot_    = 0;
         Page* page = pager_.get_page(current_page_id_);
         BTreeNode node(page);
+        
+        while (node.num_keys() == 0 && node.next_leaf() != NO_PAGE) {
+            current_page_id_ = node.next_leaf();
+            page = pager_.get_page(current_page_id_);
+            node = BTreeNode(page);
+        }
         exhausted_ = (node.num_keys() == 0);
     }
 
