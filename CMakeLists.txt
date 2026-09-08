@@ -36,6 +36,7 @@ add_test_exe(test_parser    tests/test_parser.cpp)
 add_test_exe(test_catalog   tests/test_catalog.cpp)
 add_test_exe(test_sema      tests/test_sema.cpp)
 add_test_exe(test_planner   tests/test_planner.cpp)
+add_test_exe(test_storage   tests/test_storage.cpp)
 
 
 # integration_runtime_test: links mini_sqlite_lib (which now includes pager.cpp)

@@ -70,8 +70,85 @@ public:
         exhausted_ = true;
     }
 
+    void update_current_row(const Row& row) {
+        if (exhausted_)
+            throw std::runtime_error("BTreeCursor::update_current_row() on exhausted cursor");
+
+        int64_t new_key = std::get<int64_t>(row[0]);
+        Page* page = pager_.get_page(current_page_id_);
+        BTreeNode node(page);
+        int64_t old_key = node.leaf_key(current_slot_);
+
+        if (new_key != old_key) {
+            throw std::runtime_error("Updating primary key requires a delete and insert (unsupported in primitive).");
+        }
+
+        auto row_bytes = RowSerializer::serialize(row);
+        uint16_t n = node.num_keys();
+        std::vector<std::pair<int64_t, std::vector<std::byte>>> cells;
+        cells.reserve(n);
+        size_t total_payload_size = 0;
+        
+        for (uint16_t i = 0; i < n; i++) {
+            if (i == current_slot_) {
+                cells.emplace_back(old_key, row_bytes);
+            } else {
+                cells.emplace_back(node.leaf_key(i), node.leaf_row_bytes(i));
+            }
+            total_payload_size += 8 + 2 + cells.back().second.size();
+        }
+
+        if (HEADER_SIZE + total_payload_size > PAGE_SIZE) {
+            throw std::runtime_error("Updated row exceeds available page space. BTree node split on update not implemented.");
+        }
+
+        for (uint16_t i = 0; i < n; i++) {
+            node.leaf_write_cell(i, cells[i].first, cells[i].second);
+        }
+
+        pager_.mark_dirty(current_page_id_);
+    }
+
+    void delete_current_row() {
+        if (exhausted_)
+            throw std::runtime_error("BTreeCursor::delete_current_row() on exhausted cursor");
+
+        Page* page = pager_.get_page(current_page_id_);
+        BTreeNode node(page);
+        uint16_t n = node.num_keys();
+
+        std::vector<std::pair<int64_t, std::vector<std::byte>>> cells;
+        for (uint16_t i = 0; i < n; i++) {
+            if (i != current_slot_) {
+                cells.emplace_back(node.leaf_key(i), node.leaf_row_bytes(i));
+            }
+        }
+
+        node.set_num_keys(n - 1);
+        for (uint16_t i = 0; i < cells.size(); i++) {
+            node.leaf_write_cell(i, cells[i].first, cells[i].second);
+        }
+
+        pager_.mark_dirty(current_page_id_);
+
+        if (current_slot_ >= node.num_keys()) {
+            PageId next_page = node.next_leaf();
+            if (next_page == NO_PAGE) {
+                exhausted_ = true;
+            } else {
+                current_page_id_ = next_page;
+                current_slot_    = 0;
+                Page* np = pager_.get_page(next_page);
+                BTreeNode nn(np);
+                if (nn.num_keys() == 0) {
+                    exhausted_ = true;
+                }
+            }
+        }
+    }
+
     void remove() override {
-        throw std::runtime_error("BTreeCursor::remove() not implemented until M2");
+        delete_current_row();
     }
 
     // Position at the very first (leftmost) row in key order.
