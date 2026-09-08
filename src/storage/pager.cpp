@@ -1,17 +1,24 @@
 #include "pager.h"
 #include <stdexcept>
 #include <cstring>
+#include <cerrno>
+#include <share.h>
 
 Pager::Pager(const std::string& filename) : num_pages_(0) {
-    // "r+b" = open existing file for read+write, binary mode.
-    // If that fails, the file probably doesn't exist yet, so create it
-    // with "w+b" instead.
-    file_ = fopen(filename.c_str(), "r+b");
+    // Open exclusively so no other process can read or write it while we have it.
+    file_ = _fsopen(filename.c_str(), "r+b", _SH_DENYRW);
     if (file_ == nullptr) {
-        file_ = fopen(filename.c_str(), "w+b");
+        if (errno == EACCES) {
+            throw std::runtime_error("Database is locked by another process (cannot open file).");
+        }
+        // Try creating it
+        file_ = _fsopen(filename.c_str(), "w+b", _SH_DENYRW);
     }
     if (file_ == nullptr) {
-        throw std::runtime_error("Pager: could not open file " + filename);
+        if (errno == EACCES) {
+            throw std::runtime_error("Database is locked by another process (cannot open file).");
+        }
+        throw std::runtime_error("Pager: could not open or create file " + filename + " (errno: " + std::to_string(errno) + ")");
     }
 
     // Figure out how many whole pages already exist in the file by

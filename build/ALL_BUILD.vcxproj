@@ -190,6 +190,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <Project>{A53E84F3-1AE7-3F39-8406-42383149ED5E}</Project>
       <Name>test_catalog</Name>
     </ProjectReference>
+    <ProjectReference Include="D:\New folder\SEM5\DBMS\DBMS Project\Anti_G\build\test_locking.vcxproj">
+      <Project>{1442F59F-2CC5-3B7B-8279-99A14B504C2E}</Project>
+      <Name>test_locking</Name>
+    </ProjectReference>
     <ProjectReference Include="D:\New folder\SEM5\DBMS\DBMS Project\Anti_G\build\test_parser.vcxproj">
       <Project>{9D764AE8-1F93-3ED5-97B7-2EBA50089D64}</Project>
       <Name>test_parser</Name>

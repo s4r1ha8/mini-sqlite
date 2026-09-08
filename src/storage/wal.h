@@ -41,14 +41,26 @@ struct WalRecord {
     std::array<std::byte, PAGE_SIZE> before;  // page state before write
     std::array<std::byte, PAGE_SIZE> after;   // page state after write
 };
+#include <cerrno>
+#include <share.h>
 
 class WAL {
 public:
     explicit WAL(const std::string& filename) : filename_(filename) {
-        // Open for append+read in binary mode
-        file_ = fopen(filename.c_str(), "r+b");
-        if (!file_) file_ = fopen(filename.c_str(), "w+b");
-        if (!file_) throw std::runtime_error("WAL: cannot open " + filename);
+        // Open exclusively so no other process can read or write it while we have it.
+        file_ = _fsopen(filename.c_str(), "r+b", _SH_DENYRW);
+        if (!file_) {
+            if (errno == EACCES) {
+                throw std::runtime_error("Database is locked by another process (cannot open file).");
+            }
+            file_ = _fsopen(filename.c_str(), "w+b", _SH_DENYRW);
+        }
+        if (!file_) {
+            if (errno == EACCES) {
+                throw std::runtime_error("Database is locked by another process (cannot open file).");
+            }
+            throw std::runtime_error("WAL: cannot open or create " + filename + " (errno: " + std::to_string(errno) + ")");
+        }
     }
 
     ~WAL() {
@@ -142,7 +154,7 @@ public:
     // After all dirty pages are flushed to the db file, we can clear the log.
     void truncate() {
         fclose(file_);
-        file_ = fopen(filename_.c_str(), "w+b"); // "w" truncates
+        file_ = _fsopen(filename_.c_str(), "w+b", _SH_DENYRW); // "w" truncates
         if (!file_) throw std::runtime_error("WAL: cannot truncate " + filename_);
     }
 

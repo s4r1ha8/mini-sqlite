@@ -1,0 +1,10 @@
+^D:\NEW FOLDER\SEM5\DBMS\DBMS PROJECT\ANTI_G\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SD:/New folder/SEM5/DBMS/DBMS Project/Anti_G" "-BD:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build" --check-stamp-file "D:/New folder/SEM5/DBMS/DBMS Project/Anti_G/build/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
