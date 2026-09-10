@@ -44,6 +44,11 @@ public:
         current_slot_    = lo;
         
         if (current_slot_ >= node.num_keys()) {
+            // The target was not found in the leaf that find_leaf() routed us to.
+            // Walk the leaf-chain until we find a non-empty leaf.
+            // For non-unique (duplicate) keys, the first key of that leaf may
+            // equal target — this is the separator-boundary case where duplicates
+            // continue on the right sibling even though find_leaf() routed left.
             PageId next_page = node.next_leaf();
             while (next_page != NO_PAGE) {
                 current_page_id_ = next_page;
@@ -52,7 +57,11 @@ public:
                 BTreeNode nn(np);
                 if (nn.num_keys() > 0) {
                     exhausted_ = false;
-                    return false;
+                    // Check whether the first key of this leaf matches target.
+                    // If it does, seek() found the first occurrence (return true).
+                    // If not, the cursor is positioned at the next key > target
+                    // (return false — target is absent but cursor is valid).
+                    return (nn.leaf_key(0) == target);
                 }
                 next_page = nn.next_leaf();
             }

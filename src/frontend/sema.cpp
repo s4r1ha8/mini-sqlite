@@ -162,6 +162,105 @@ void SemanticAnalyzer::analyzeInsert(const InsertStmt& stmt) {
 }
 
 // ── UPDATE ────────────────────────────────────────────────────────────────────
+//
+// Type-checking helpers for SET RHS expressions.
+//
+// inferExprType() performs a best-effort static analysis to determine the
+// DataType that an Expr will produce at runtime.  It returns nullopt when the
+// type genuinely cannot be determined statically (e.g., arithmetic expressions
+// that mix column references of different types).
+//
+// isAssignmentCompatible() mirrors INSERT's type rules:
+//   INTEGER  ← INTEGER   ok
+//   INTEGER  ← REAL      ok (numeric widening — matches INSERT behaviour)
+//   INTEGER  ← TEXT      REJECT
+//   REAL     ← INTEGER   ok
+//   REAL     ← REAL      ok
+//   REAL     ← TEXT      REJECT
+//   TEXT     ← TEXT      ok
+//   TEXT     ← INTEGER   REJECT
+//   TEXT     ← REAL      REJECT
+// NULL (monostate) is validated by the caller via the NOT NULL flag.
+
+static std::optional<DataType>
+inferExprType(const Expr& expr,
+              const std::string& table_name,
+              const Catalog& catalog,
+              const std::unordered_map<std::string, std::string>& tables) {
+    return std::visit([&](const auto& node) -> std::optional<DataType> {
+        using T = std::decay_t<decltype(node)>;
+
+        // ── Literal: type is determined directly from the variant ──────────
+        if constexpr (std::is_same_v<T, Literal>) {
+            return std::visit([](const auto& v) -> std::optional<DataType> {
+                using V = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<V, std::monostate>) return std::nullopt; // NULL
+                if constexpr (std::is_same_v<V, int64_t>)       return DataType::INTEGER;
+                if constexpr (std::is_same_v<V, double>)        return DataType::REAL;
+                if constexpr (std::is_same_v<V, std::string>)   return DataType::TEXT;
+                return std::nullopt;
+            }, node.value);
+        }
+
+        // ── ColumnRef: look up the column type in the catalog ─────────────
+        if constexpr (std::is_same_v<T, ColumnRef>) {
+            // Resolve the table this column belongs to
+            std::string real_table;
+            if (node.table.has_value()) {
+                auto it = tables.find(*node.table);
+                if (it != tables.end()) real_table = it->second;
+            } else {
+                // Unqualified: check each referenced table
+                for (const auto& [alias, tname] : tables) {
+                    if (catalog.column_exists(tname, node.column)) {
+                        real_table = tname;
+                        break;
+                    }
+                }
+            }
+            if (!real_table.empty()) {
+                return catalog.column_type(real_table, node.column);
+            }
+            return std::nullopt;
+        }
+
+        // ── BinaryOp / UnaryOp: comparison and logical operators always
+        //    produce an INTEGER (0 or 1) at runtime.  Arithmetic expressions
+        //    (+,-,*,/) may produce INTEGER or REAL depending on operands;
+        //    for safety we only claim INTEGER for operators that definitely
+        //    yield boolean-integer results (AND, OR, =, !=, <, >, <=, >=).
+        //    For arithmetic we return nullopt so the caller does not
+        //    over-constrain.
+        if constexpr (std::is_same_v<T, BinaryOp>) {
+            static const std::unordered_set<std::string> bool_ops = {
+                "AND","OR","=","!=","<",">","<=",">="
+            };
+            if (bool_ops.count(node.op)) return DataType::INTEGER;
+            return std::nullopt; // arithmetic — cannot determine statically
+        }
+
+        if constexpr (std::is_same_v<T, UnaryOp>) {
+            // NOT always yields INTEGER (0 or 1)
+            return DataType::INTEGER;
+        }
+
+        // ── AggregateCall: invalid inside a SET clause ─────────────────────
+        if constexpr (std::is_same_v<T, AggregateCall>) {
+            return std::nullopt; // handled separately — caller rejects this
+        }
+
+        return std::nullopt;
+    }, expr.node);
+}
+
+static bool isAssignmentCompatible(DataType target, DataType source) {
+    if (target == source) return true;
+    // Numeric widening: INTEGER <-> REAL allowed (matches INSERT semantics)
+    if (target == DataType::INTEGER && source == DataType::REAL) return true;
+    if (target == DataType::REAL    && source == DataType::INTEGER) return true;
+    // Everything else (TEXT <-> numeric, numeric <-> TEXT) is incompatible
+    return false;
+}
 
 void SemanticAnalyzer::analyzeUpdate(const UpdateStmt& stmt) {
     if (!catalog_.table_exists(stmt.table_name)) {
@@ -187,7 +286,56 @@ void SemanticAnalyzer::analyzeUpdate(const UpdateStmt& stmt) {
                 "UPDATE: duplicate column '" + assign.column + "' in SET clause.");
         }
 
+        // ── Validate RHS column references ────────────────────────────────
         analyzeExpr(assign.value, tables);
+
+        // ── Reject aggregate functions in SET context ─────────────────────
+        if (std::holds_alternative<AggregateCall>(assign.value.node)) {
+            throw SemanticError(
+                "UPDATE: aggregate functions are not allowed in SET clause.");
+        }
+
+        // ── Static type check: RHS type must be compatible with target ─────
+        // Retrieve the declared type of the target column.
+        auto target_type_opt = catalog_.column_type(stmt.table_name, assign.column);
+        if (!target_type_opt.has_value()) continue; // column doesn't exist — caught above
+        DataType target_type = *target_type_opt;
+
+        // NULL literal: validate NOT NULL constraint only.
+        if (const auto* lit = std::get_if<Literal>(&assign.value.node)) {
+            if (std::holds_alternative<std::monostate>(lit->value)) {
+                // NULL — NOT NULL check is a runtime concern (we allow NULL here
+                // just as INSERT does at sema level when is_not_null is false).
+                const TableSchema* s = catalog_.get_table(stmt.table_name);
+                if (s) {
+                    for (const auto& col : s->columns) {
+                        if (col.name == assign.column && col.is_not_null) {
+                            throw SemanticError(
+                                "UPDATE: column '" + assign.column +
+                                "' is NOT NULL but a NULL value was assigned.");
+                        }
+                    }
+                }
+                continue; // NULL type check done
+            }
+        }
+
+        // Infer static type of the RHS expression.
+        auto rhs_type_opt = inferExprType(assign.value, stmt.table_name,
+                                          catalog_, tables);
+
+        if (rhs_type_opt.has_value()) {
+            DataType rhs_type = *rhs_type_opt;
+            if (!isAssignmentCompatible(target_type, rhs_type)) {
+                throw SemanticError(
+                    "UPDATE: cannot assign " + dataTypeToString(rhs_type) +
+                    " expression to column '" + assign.column +
+                    "' of type " + dataTypeToString(target_type) + ".");
+            }
+        }
+        // If rhs_type_opt is nullopt (complex arithmetic expression whose type
+        // cannot be determined statically), allow it through — the evaluator
+        // will produce an appropriate runtime error if there is a mismatch.
     }
 
     if (stmt.where.has_value()) {

@@ -643,6 +643,167 @@ static void testUpdateDuplicateSetColumn() {
 }
 
 // ============================================================================
+// UPDATE — type validation regression tests (BUG 1 fix)
+// ============================================================================
+
+static void testUpdateTypeValidation() {
+    // Build a catalog that has all three column types.
+    Catalog cat;
+    TableSchema t;
+    t.name        = "t";
+    t.primary_key = "id";
+    t.columns = {
+        {"id",    DataType::INTEGER, 0, true},   // NOT NULL PK
+        {"score", DataType::REAL,    1, false},
+        {"label", DataType::TEXT,    2, false},
+        {"extra", DataType::INTEGER, 3, false},   // nullable int
+    };
+    cat.add_table(std::move(t));
+
+    // ── Disallowed cross-type assignments ──────────────────────────────────────
+
+    // INTEGER column <- TEXT literal
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET id = 'oops'"),
+        "INTEGER col <- TEXT literal must throw"
+    );
+
+    // INTEGER column <- TEXT literal (non-PK)
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET extra = 'bad'"),
+        "INTEGER col <- TEXT literal (non-PK) must throw"
+    );
+
+    // TEXT column <- INTEGER literal
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET label = 42"),
+        "TEXT col <- INTEGER literal must throw"
+    );
+
+    // TEXT column <- REAL literal
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET label = 3.14"),
+        "TEXT col <- REAL literal must throw"
+    );
+
+    // REAL column <- TEXT literal
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET score = 'hello'"),
+        "REAL col <- TEXT literal must throw"
+    );
+
+    // PK (INTEGER) <- TEXT literal — must fail BEFORE mutation
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET id = 'oops' WHERE id = 1"),
+        "PK INTEGER col <- TEXT literal with WHERE must throw"
+    );
+
+    // ── Allowed same-type and numeric-widening assignments ────────────────────
+
+    // INTEGER <- INTEGER
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET id = 99"),
+        "INTEGER col <- INTEGER literal ok"
+    );
+
+    // REAL <- REAL
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET score = 3.14"),
+        "REAL col <- REAL literal ok"
+    );
+
+    // TEXT <- TEXT
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET label = 'hello'"),
+        "TEXT col <- TEXT literal ok"
+    );
+
+    // INTEGER <- REAL (numeric widening — matches INSERT behaviour)
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET id = 3.14"),
+        "INTEGER col <- REAL literal (widening) ok"
+    );
+
+    // REAL <- INTEGER (numeric widening)
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET score = 42"),
+        "REAL col <- INTEGER literal (widening) ok"
+    );
+
+    // ── NULL assignments ───────────────────────────────────────────────────────
+
+    // NULL into nullable column — ok
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET label = NULL"),
+        "NULL into nullable TEXT col ok"
+    );
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET score = NULL"),
+        "NULL into nullable REAL col ok"
+    );
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET extra = NULL"),
+        "NULL into nullable INTEGER col ok"
+    );
+
+    // NULL into NOT NULL column — must throw
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET id = NULL"),
+        "NULL into NOT NULL col must throw"
+    );
+
+    // ── ColumnRef RHS — type is resolved from catalog ─────────────────────────
+
+    // INTEGER col <- INTEGER col (same type)
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET id = extra"),
+        "INTEGER col <- INTEGER col ref ok"
+    );
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET extra = id"),
+        "INTEGER col <- INTEGER col ref (reverse) ok"
+    );
+
+    // REAL col <- INTEGER col (numeric widening)
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET score = extra"),
+        "REAL col <- INTEGER col ref (widening) ok"
+    );
+
+    // INTEGER col <- REAL col (numeric widening)
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET extra = score"),
+        "INTEGER col <- REAL col ref (widening) ok"
+    );
+
+    // TEXT col <- INTEGER col — must throw
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET label = id"),
+        "TEXT col <- INTEGER col ref must throw"
+    );
+
+    // INTEGER col <- TEXT col — must throw
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET id = label"),
+        "INTEGER col <- TEXT col ref must throw"
+    );
+
+    // ── Boolean/comparison expression RHS — result is INTEGER ─────────────────
+
+    // INTEGER col <- comparison expr (yields INTEGER) — ok
+    CHECK(
+        analyzeOk(cat, "UPDATE t SET id = (id = 1)"),
+        "INTEGER col <- comparison expr (INTEGER result) ok"
+    );
+
+    // TEXT col <- comparison expr (yields INTEGER) — must throw
+    CHECK(
+        analyzeThrows(cat, "UPDATE t SET label = (id = 1)"),
+        "TEXT col <- comparison expr (INTEGER result) must throw"
+    );
+}
+
+// ============================================================================
 // DELETE
 // ============================================================================
 
@@ -726,6 +887,7 @@ int main() {
     testUpdateMissingColumn();
     testUpdateMissingWhereColumn();
     testUpdateDuplicateSetColumn();
+    testUpdateTypeValidation();
 
     testDeleteOk();
     testDeleteMissingTable();

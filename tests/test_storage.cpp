@@ -448,6 +448,141 @@ static void testPrimaryKeyRejection() {
     CHECK(threw, "Primary key BTree rejects duplicate key correctly");
 }
 
+// ============================================================================
+// BUG 2 REGRESSION: Duplicate index boundary seek
+//
+// Root cause: BTreeCursor::seek() unconditionally returned false when it
+// advanced from an empty (or exhausted) leaf to the next_leaf via the
+// leaf-chain. It did not check whether the first key of the new leaf
+// equalled the target. This manifests precisely when:
+//   - 33+ identical duplicate keys are inserted into a non-unique BTree
+//   - A leaf split occurs, making the separator == the duplicate key
+//   - find_leaf() routes to the LEFT child (because key > sep is false)
+//   - The left leaf is later emptied or the binary search falls off the end
+//   - seek() jumps to next_leaf but returns false without checking leaf_key(0)
+// ============================================================================
+
+static void testIndexBoundarySeek() {
+    cleanup();
+
+    // Insert LEAF_MAX_CELLS + 1 = 33 entries with the same key to force
+    // exactly one leaf split. After split: separator = that key value.
+    // find_leaf() in non-unique mode routes to LEFT child for that key.
+    const int64_t DUP_KEY = 777LL;
+    const int TOTAL = 33; // LEAF_MAX_CELLS is 32
+
+    PageId saved_root = NO_PAGE;
+
+    {
+        Pager pager(temp_filename);
+        PageId idx_root = IndexManager::create(pager);
+        for (int i = 1; i <= TOTAL; i++) {
+            idx_root = IndexManager::insert_entry(pager, idx_root, Value(DUP_KEY), (int64_t)i);
+        }
+        saved_root = idx_root;
+
+        // 1. open_cursor must find the first occurrence
+        auto cursor = IndexManager::open_cursor(pager, idx_root, Value(DUP_KEY));
+        CHECK(cursor && !cursor->is_exhausted(), "open_cursor finds first occurrence after split");
+
+        // 2. Scan all duplicates - must return exactly TOTAL
+        int64_t target_key = IndexManager::value_to_key(Value(DUP_KEY));
+        int count = 0;
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            count++;
+            cursor->next();
+        }
+        CHECK(count == TOTAL, "Index scan returns all 33 duplicates across leaf boundary");
+
+        // 3. Remove the entry whose PK sits exactly at the boundary leaf split
+        //    (PK=17 is the first entry in the RIGHT leaf after a 16/17 split)
+        IndexManager::remove_entry(pager, idx_root, Value(DUP_KEY), 17);
+
+        cursor = IndexManager::open_cursor(pager, idx_root, Value(DUP_KEY));
+        count = 0;
+        int found_17 = 0;
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            int64_t pk = std::get<int64_t>(r[1]);
+            if (pk == 17) found_17++;
+            count++;
+            cursor->next();
+        }
+        CHECK(count == TOTAL - 1, "Scan returns 32 after removing boundary-PK");
+        CHECK(found_17 == 0, "Removed boundary PK (17) is absent from scan");
+
+        // 4. Delete all entries in the LEFT leaf (PKs 1..16) to force the
+        //    seek-through-empty-leaf scenario precisely described in the bug.
+        for (int i = 1; i <= 16; i++) {
+            IndexManager::remove_entry(pager, idx_root, Value(DUP_KEY), (int64_t)i);
+        }
+
+        // Now seek(DUP_KEY) must still find the remaining entries in the RIGHT leaf.
+        cursor = IndexManager::open_cursor(pager, idx_root, Value(DUP_KEY));
+        CHECK(cursor && !cursor->is_exhausted(),
+              "seek finds first occurrence in RIGHT leaf after LEFT leaf emptied");
+
+        count = 0;
+        while (cursor && !cursor->is_exhausted()) {
+            Row r = cursor->current();
+            if (std::get<int64_t>(r[0]) != target_key) break;
+            count++;
+            cursor->next();
+        }
+        // 33 total - 1 (pk=17) - 16 (left leaf) = 16 remaining
+        CHECK(count == 16, "Scan returns 16 after removing left-leaf entries");
+
+        // 5. An absent key between leaf ranges must return false, not crash.
+        // Insert a different key to ensure the tree is multi-valued.
+        idx_root = IndexManager::insert_entry(pager, idx_root, Value(999LL), 999LL);
+        auto absent_cursor = IndexManager::open_cursor(pager, idx_root, Value(888LL));
+        // 888 does not exist; cursor should be positioned at something >= 888 (i.e. 999)
+        // and is_exhausted() should be false (there are still rows).
+        if (absent_cursor && !absent_cursor->is_exhausted()) {
+            Row r = absent_cursor->current();
+            int64_t k = std::get<int64_t>(r[0]);
+            int64_t k_999 = IndexManager::value_to_key(Value(999LL));
+            CHECK(k == k_999, "Absent key seek positions cursor at next key (999)");
+        }
+        // Also verify a direct seek returning false for truly absent key (below all entries)
+        // This uses a raw BTreeCursor to check return value.
+        BTreeCursor raw_cursor(pager, idx_root, 2, false);
+        bool found = raw_cursor.seek(IndexManager::value_to_key(Value(888LL)));
+        CHECK(!found, "seek for absent key 888 returns false");
+
+        // 6. Remove remaining entries one-by-one and verify no zombie entries.
+        for (int i = 18; i <= TOTAL; i++) {
+            if (i == 17) continue; // already removed
+            IndexManager::remove_entry(pager, idx_root, Value(DUP_KEY), (int64_t)i);
+        }
+        cursor = IndexManager::open_cursor(pager, idx_root, Value(DUP_KEY));
+        // After removing all DUP_KEY entries, none should remain.
+        bool any_remaining = (cursor && !cursor->is_exhausted() &&
+                              std::get<int64_t>(cursor->current()[0]) == target_key);
+        CHECK(!any_remaining, "No zombie entries after removing all duplicates");
+
+        pager.flush_all();
+    }
+
+    // 7. Persistence: reopen and verify the state is correct.
+    {
+        Pager pager(temp_filename);
+        auto cursor = IndexManager::open_cursor(pager, saved_root, Value(DUP_KEY));
+        bool any_dup = (cursor && !cursor->is_exhausted() &&
+                        std::get<int64_t>(cursor->current()[0]) ==
+                            IndexManager::value_to_key(Value(DUP_KEY)));
+        CHECK(!any_dup, "Persistence: no DUP_KEY entries after reopen");
+
+        // 999 should still be there.
+        auto cursor2 = IndexManager::open_cursor(pager, saved_root, Value(999LL));
+        CHECK(cursor2 && !cursor2->is_exhausted(), "Persistence: 999 survives reopen");
+    }
+}
+
+
 int main() {
     std::cout << "Running Storage Tests...\n";
     testUpdateAndSizeChanges();
@@ -457,6 +592,7 @@ int main() {
     testPersistence();
     testIndexMaintenance();
     testPrimaryKeyRejection();
+    testIndexBoundarySeek();
 
     std::cout << "Storage: " << passed << " passed, " << failed << " failed.\n";
     cleanup();
