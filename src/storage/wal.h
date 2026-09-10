@@ -43,6 +43,7 @@ struct WalRecord {
 };
 #include <cerrno>
 #include <share.h>
+#include <io.h> // for _commit
 
 class WAL {
 public:
@@ -77,12 +78,14 @@ public:
         write_header_record(WalRecordType::Commit, txn_id, 0);
         // fsync so the commit is durable before we return to the caller
         fflush(file_);
+        _commit(_fileno(file_));
     }
 
     // ── Write a ROLLBACK record ──
     void write_rollback(uint64_t txn_id) {
         write_header_record(WalRecordType::Rollback, txn_id, 0);
         fflush(file_);
+        _commit(_fileno(file_));
     }
 
     // ── Write a PAGE_WRITE record ──
@@ -113,6 +116,7 @@ public:
         // but that's ok because the data page hasn't been written yet either.
         // The order guarantee is: WAL on disk → THEN data page written.
         fflush(file_);
+        _commit(_fileno(file_));
     }
 
     // ── Read all records from the log (for recovery) ──

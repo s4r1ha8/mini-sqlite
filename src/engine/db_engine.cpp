@@ -108,11 +108,10 @@ void DatabaseEngine::bootstrap_if_fresh() {
 }
 
 void DatabaseEngine::recover_and_load() {
-    // Run WAL recovery (ARIES-style redo + undo).
+    // Run WAL recovery (physical whole-page WAL with REDO/UNDO recovery).
     // This re-applies any committed B-tree page writes and undoes any
-    // uncommitted ones.  Page 0 (catalog) is NOT WAL-logged — it is
-    // written directly to disk after every commit, so it is always
-    // consistent after crash (last complete flush wins).
+    // uncommitted ones. Page 0 (catalog) is now WAL-logged along with 
+    // all other pages to ensure atomic catalog updates.
     auto [redone, undone] = Recovery::run(pager_, wal_, /*verbose=*/false);
     if (redone > 0 || undone > 0) {
         std::cout << "[Recovery] Redone: " << redone
@@ -136,7 +135,7 @@ void DatabaseEngine::recover_and_load() {
 //       inside txn_mgr_.commit().
 // In both cases the database is consistent.
 
-void DatabaseEngine::save_catalog() {
+void DatabaseEngine::serialize_catalog() {
     auto bytes = CatalogSerializer::serialize(catalog_);
 
     Page* p0 = pager_.get_page(0);
@@ -147,7 +146,6 @@ void DatabaseEngine::save_catalog() {
         p0->data[i] = bytes[i];
     }
     pager_.mark_dirty(0);
-    pager_.flush_page(0);  // direct flush, bypassing WAL
 }
 
 void DatabaseEngine::load_catalog() {
@@ -170,12 +168,13 @@ void DatabaseEngine::auto_commit() {
     // If the user typed BEGIN explicitly, we do NOT commit here —
     // they must type COMMIT or ROLLBACK themselves.
     if (active_txn_.has_value() && !explicit_txn_) {
+        // Serialize catalog into Page 0 in memory BEFORE commit,
+        // so it becomes part of the same WAL transaction.
+        serialize_catalog();
+        
         txn_mgr_.commit(*active_txn_);
         active_txn_ = std::nullopt;
         explicit_txn_ = false;
-        // Save catalog only when we actually commit.  During an explicit
-        // transaction, save_catalog() is deferred to executeTxn(COMMIT).
-        save_catalog();
     }
 }
 
@@ -217,10 +216,6 @@ void DatabaseEngine::executeCreateTable(const CreateTableStmt& stmt) {
     // 2. Allocate B-tree root (gets page 1+ because page 0 is the catalog)
     PageId root = BTree::create(pager_);
 
-    // 3. Log the root page via TxnManager
-    Page* root_page = pager_.get_page(root);
-    txn_mgr_.write_page(tid, root, root_page->data);
-
     // 4. Store root_page_id in catalog
     schema->root_page_id = static_cast<int>(root);
 
@@ -252,8 +247,6 @@ void DatabaseEngine::executeCreateIndex(const CreateIndexStmt& stmt) {
     TxnId tid = ensure_txn();
 
     PageId idx_root = IndexManager::create(pager_);
-    Page* idx_page = pager_.get_page(idx_root);
-    txn_mgr_.write_page(tid, idx_root, idx_page->data);
 
     int col_ordinal = catalog_.column_ordinal(stmt.table_name, stmt.column_name);
     if (col_ordinal < 0) {
@@ -307,17 +300,7 @@ void DatabaseEngine::executeInsert(const InsertStmt& stmt) {
 
     TxnId tid = ensure_txn();
 
-    // ── Pre-insert snapshot ──────────────────────────────────────────────────
-    // We must log existing pages BEFORE the cursor.insert() modifies them so
-    // that TxnManager captures the correct before-image for UNDO (ROLLBACK).
-    // We snapshot every existing page in the B-tree range:  page 1 through
-    // (page_count - 1).  Page 0 is the catalog (not WAL-managed).
-    // This is conservative but correct for v1 (single table at a time).
-    uint32_t pages_before = pager_.page_count();
-    for (uint32_t pg = 1; pg < pages_before; pg++) {
-        Page* p = pager_.get_page(pg);
-        txn_mgr_.write_page(tid, pg, p->data);
-    }
+    // Snapshotting of all existing pages is now done in ensure_txn().
 
     // ── Do the insert ─────────────────────────────────────────────────────────
     BTreeCursor cursor(pager_,
@@ -330,15 +313,7 @@ void DatabaseEngine::executeInsert(const InsertStmt& stmt) {
         schema->root_page_id = static_cast<int>(new_root);
     }
 
-    // ── Log newly allocated pages (splits) ────────────────────────────────────
-    // These pages didn't exist before the insert, so their "before" image is
-    // all-zeroes (which is what a fresh page looks like).  TxnManager.write_page
-    // will capture the current (all-zeroes before, actual content after) state.
-    uint32_t pages_after = pager_.page_count();
-    for (uint32_t pg = pages_before; pg < pages_after; pg++) {
-        Page* p = pager_.get_page(pg);
-        txn_mgr_.write_page(tid, pg, p->data);
-    }
+    // New page synthesis for the WAL is now fully handled in TxnManager::commit().
 
     // Update indexes
     int64_t pk = std::get<int64_t>(row[0]);
@@ -374,12 +349,7 @@ void DatabaseEngine::executeDelete(const DeleteStmt& stmt) {
 
     TxnId tid = ensure_txn();
 
-    // 1. Snapshot ALL existing pages for rollback safety
-    uint32_t pages_before = pager_.page_count();
-    for (uint32_t pg = 1; pg < pages_before; pg++) {
-        Page* p = pager_.get_page(pg);
-        txn_mgr_.write_page(tid, pg, p->data);
-    }
+    // Snapshotting of all existing pages is now done in ensure_txn().
 
     // 2. Build dummy SelectStmt to reuse Planner/Executor for WHERE evaluation
     SelectStmt dummy_sel;
@@ -453,11 +423,7 @@ void DatabaseEngine::executeUpdate(const UpdateStmt& stmt) {
     TxnId tid = ensure_txn();
 
     // ── 1. Snapshot ALL existing pages before any mutation ────────────────────
-    uint32_t pages_before = pager_.page_count();
-    for (uint32_t pg = 1; pg < pages_before; pg++) {
-        Page* p = pager_.get_page(pg);
-        txn_mgr_.write_page(tid, pg, p->data);
-    }
+    // Handled natively by ensure_txn() now.
 
     // ── 2. Determine which column ordinals are being SET ──────────────────────
     // Build a map: col_name -> assignment ordinal in stmt.updates (for lookup)
@@ -732,10 +698,10 @@ void DatabaseEngine::executeTxn(const TxnStmt& stmt) {
                 std::cerr << "[TXN] WARNING: no active transaction\n";
                 return;
             }
+            serialize_catalog();
             txn_mgr_.commit(*active_txn_);
             active_txn_   = std::nullopt;
             explicit_txn_ = false;
-            save_catalog();
             std::cout << "[TXN] COMMIT\n";
             break;
 

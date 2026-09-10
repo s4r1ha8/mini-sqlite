@@ -80,7 +80,7 @@ private:
     void recover_and_load();     // run Recovery, then load catalog from page 0
 
     // --- catalog persistence ------------------------------------------------
-    void save_catalog();         // write catalog to page 0 and flush
+    void serialize_catalog();    // write catalog to page 0 memory
     void load_catalog();         // read catalog from page 0
 
     // --- transaction helpers ------------------------------------------------
