@@ -35,6 +35,10 @@ public:
     // Allocates a brand new page at the end of the file and returns its id.
     PageId allocate_page();
 
+    // After recovery writes new pages and flushes them to disk,
+    // this synchronizes num_pages_ with the new physical file extent.
+    void refresh_page_count_from_file();
+
     // How many pages currently exist in the file.
     uint32_t page_count() const { return num_pages_; }
 

@@ -13,13 +13,17 @@
 //    - REDOs committed transactions (re-applies after-images)
 //    - UNDOes incomplete transactions (applies before-images)
 //
-//  This is the ARIES recovery algorithm simplified:
+//  This uses a physical whole-page WAL with REDO/UNDO recovery:
 //    1. Analysis pass: find which txns committed, which didn't
-//    2. Redo pass: re-apply all committed writes (idempotent)
+//    2. Redo pass: re-apply all committed writes (idempotent physical overwrite)
 //    3. Undo pass: roll back all uncommitted writes
 //
 //  After recovery the database is in a consistent state as if
 //  only the committed transactions ever happened.
+//
+//  Note: Uncommitted mutations are protected primarily by the strict NO-STEAL
+//  policy. The Pager never flushes dirty pages until an explicit commit or 
+//  checkpoint, ensuring the .db file itself does not leak uncommitted data.
 // ─────────────────────────────────────────────────────────────────
 
 class Recovery {
@@ -95,6 +99,10 @@ public:
 
         // Clear the WAL after successful recovery (checkpoint)
         wal.truncate();
+
+        // Synchronize Pager's num_pages_ with the new physical file extent
+        // to prevent allocating over recovered pages.
+        pager.refresh_page_count_from_file();
 
         return {redone, undone};
     }

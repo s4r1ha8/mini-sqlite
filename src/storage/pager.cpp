@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cerrno>
 #include <share.h>
+#include <io.h> // for _commit
 
 Pager::Pager(const std::string& filename) : num_pages_(0) {
     // Open exclusively so no other process can read or write it while we have it.
@@ -29,7 +30,9 @@ Pager::Pager(const std::string& filename) : num_pages_(0) {
 }
 
 Pager::~Pager() {
-    flush_all();
+    // DO NOT flush_all() here.
+    // This violated NO-STEAL. Only explicit txn_mgr.commit() or checkpoints
+    // are allowed to write dirty pages to disk.
     if (file_) fclose(file_);
 }
 
@@ -69,6 +72,7 @@ void Pager::flush_page(PageId id) {
     fseek(file_, static_cast<long>(id) * PAGE_SIZE, SEEK_SET);
     fwrite(page.data.data(), 1, PAGE_SIZE, file_);
     fflush(file_);  // push from C's buffer into the OS
+    _commit(_fileno(file_)); // push from OS buffer to hardware
     page.dirty = false;
 }
 
@@ -81,7 +85,10 @@ void Pager::flush_all() {
             page.dirty = false;
         }
     }
-    if (file_) fflush(file_);
+    if (file_) {
+        fflush(file_);
+        _commit(_fileno(file_));
+    }
 }
 
 PageId Pager::allocate_page() {
@@ -90,4 +97,11 @@ PageId Pager::allocate_page() {
     // Touch it via get_page so it exists in the cache as a zeroed page.
     get_page(new_id);
     return new_id;
+}
+
+void Pager::refresh_page_count_from_file() {
+    if (!file_) return;
+    fseek(file_, 0, SEEK_END);
+    long file_size = ftell(file_);
+    num_pages_ = static_cast<uint32_t>(file_size / PAGE_SIZE);
 }
