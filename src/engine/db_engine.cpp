@@ -36,23 +36,43 @@ void DatabaseEngine::execute(const std::string& sql) {
     Parser parser(std::move(tokens));
     Statement stmt = parser.parse();
 
-    SemanticAnalyzer sema(catalog_);
-    sema.analyze(stmt);
+    // If an explicit transaction has aborted, reject all statements except ROLLBACK.
+    if (txn_aborted_) {
+        bool is_rollback = false;
+        if (const auto* txn = std::get_if<TxnStmt>(&stmt)) {
+            is_rollback = (txn->kind == TxnStmt::Kind::ROLLBACK);
+        }
+        if (!is_rollback) {
+            if (const auto* txn = std::get_if<TxnStmt>(&stmt)) {
+                if (txn->kind == TxnStmt::Kind::COMMIT) {
+                    throw std::runtime_error("Transaction is aborted: cannot COMMIT; must ROLLBACK");
+                }
+                if (txn->kind == TxnStmt::Kind::BEGIN) {
+                    throw std::runtime_error("Transaction is aborted: cannot BEGIN; must ROLLBACK");
+                }
+            }
+            throw std::runtime_error("Transaction is aborted, commands ignored until end of transaction block; must ROLLBACK");
+        }
+    }
 
-    // Run the statement.  If it throws and we were in an auto-started
-    // transaction (not an explicit BEGIN), roll back to leave the engine in a
-    // clean state for the next statement.  Explicit transactions are left open
-    // so the caller can issue ROLLBACK themselves.
     try {
+        SemanticAnalyzer sema(catalog_);
+        sema.analyze(stmt);
+
         executeParsed(stmt);
     } catch (...) {
         if (active_txn_.has_value() && !explicit_txn_) {
             // Auto-transaction: roll back silently and clear state.
             try { txn_mgr_.rollback(*active_txn_); } catch (...) {}
-            active_txn_  = std::nullopt;
+            active_txn_   = std::nullopt;
             explicit_txn_ = false;
+            txn_aborted_  = false;
+        } else if (active_txn_.has_value() && explicit_txn_) {
+            // Explicit transaction: mark transaction aborted so subsequent
+            // statements cannot commit corrupted/partial state.
+            txn_aborted_ = true;
         }
-        throw;  // re-propagate so the REPL can print the error
+        throw;  // re-propagate so the REPL / caller can print the error
     }
 }
 
@@ -156,9 +176,13 @@ void DatabaseEngine::load_catalog() {
 // ── Private: transaction helpers ─────────────────────────────────────────────
 
 TxnId DatabaseEngine::ensure_txn() {
+    if (txn_aborted_) {
+        throw std::runtime_error("Transaction is aborted: cannot begin or execute statements; must ROLLBACK");
+    }
     if (!active_txn_.has_value()) {
         active_txn_ = txn_mgr_.begin();
         explicit_txn_ = false;  // auto-started
+        txn_aborted_  = false;
     }
     return *active_txn_;
 }
@@ -173,8 +197,9 @@ void DatabaseEngine::auto_commit() {
         serialize_catalog();
         
         txn_mgr_.commit(*active_txn_);
-        active_txn_ = std::nullopt;
+        active_txn_   = std::nullopt;
         explicit_txn_ = false;
+        txn_aborted_  = false;
     }
 }
 
@@ -688,8 +713,9 @@ void DatabaseEngine::executeTxn(const TxnStmt& stmt) {
                 std::cerr << "[TXN] WARNING: already in a transaction (ignored)\n";
                 return;
             }
-            active_txn_  = txn_mgr_.begin();
+            active_txn_   = txn_mgr_.begin();
             explicit_txn_ = true;   // user explicitly opened this transaction
+            txn_aborted_  = false;
             std::cout << "[TXN] BEGIN\n";
             break;
 
@@ -702,17 +728,20 @@ void DatabaseEngine::executeTxn(const TxnStmt& stmt) {
             txn_mgr_.commit(*active_txn_);
             active_txn_   = std::nullopt;
             explicit_txn_ = false;
+            txn_aborted_  = false;
             std::cout << "[TXN] COMMIT\n";
             break;
 
         case TxnStmt::Kind::ROLLBACK:
             if (!active_txn_.has_value()) {
+                txn_aborted_  = false;
                 std::cerr << "[TXN] WARNING: no active transaction\n";
                 return;
             }
             txn_mgr_.rollback(*active_txn_);
             active_txn_   = std::nullopt;
             explicit_txn_ = false;
+            txn_aborted_  = false;
             load_catalog();   // reload catalog to undo schema changes
             std::cout << "[TXN] ROLLBACK\n";
             break;

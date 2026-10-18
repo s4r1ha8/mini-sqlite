@@ -34,13 +34,14 @@ UPDATE t1 SET id = 99 WHERE id = 3;
 COMMIT;
 SELECT * FROM t1; -- Should be (1,100), (99,30)
 
--- Failure mid-transaction doesn't corrupt the rest
+-- Failure mid-transaction marks transaction aborted; commands rejected until ROLLBACK
 BEGIN;
 INSERT INTO t1 VALUES (5, 50);
 INSERT INTO t1 VALUES (99, 999); -- Fails due to PK 99
-INSERT INTO t1 VALUES (6, 60);
-COMMIT;
-SELECT * FROM t1; -- Should have 5, 6, 1, 99
+INSERT INTO t1 VALUES (6, 60); -- Rejected: txn is aborted
+COMMIT; -- Rejected: cannot commit aborted txn
+ROLLBACK;
+SELECT * FROM t1; -- Should be (1,100), (99,30)
 
 -- F4.6 Multi-statement index consistency
 CREATE TABLE t2 (id INTEGER PRIMARY KEY, category INTEGER, age INTEGER);

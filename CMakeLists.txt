@@ -37,6 +37,7 @@ add_test_exe(test_catalog   tests/test_catalog.cpp)
 add_test_exe(test_sema      tests/test_sema.cpp)
 add_test_exe(test_planner   tests/test_planner.cpp)
 add_test_exe(test_storage   tests/test_storage.cpp)
+add_test_exe(test_durability tests/test_durability.cpp)
 add_executable(test_locking tests/test_locking.cpp)
 target_link_libraries(test_locking PRIVATE mini_sqlite_lib)
 

@@ -62,6 +62,15 @@ public:
     void printTables() const;
     void printSchema(const std::string& table_name) const;
 
+    // Returns true if an explicit transaction is currently in an aborted state.
+    bool is_txn_aborted() const { return txn_aborted_; }
+
+    // Returns true if a transaction (explicit or auto) is currently active.
+    bool in_transaction() const { return active_txn_.has_value(); }
+
+    // Returns true if the active transaction is an explicit BEGIN transaction.
+    bool is_explicit_txn() const { return explicit_txn_; }
+
 private:
     // --- owned storage resources -------------------------------------------
     Pager      pager_;
@@ -74,6 +83,8 @@ private:
     std::optional<TxnId> active_txn_;
     // true when the user typed BEGIN explicitly; false for auto-transactions.
     bool explicit_txn_ = false;
+    // true when an error occurred during an explicit transaction; only ROLLBACK is allowed.
+    bool txn_aborted_ = false;
 
     // --- startup helpers ----------------------------------------------------
     void bootstrap_if_fresh();   // reserve page 0 on a brand-new database
