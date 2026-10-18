@@ -47,6 +47,8 @@ private:
     void analyzeCreateIndex(const CreateIndexStmt& stmt);
     void analyzeInsert(const InsertStmt& stmt);
     void analyzeSelect(const SelectStmt& stmt);
+    void analyzeUpdate(const UpdateStmt& stmt);
+    void analyzeDelete(const DeleteStmt& stmt);
 
     // Check that an Expr references only columns that exist in the given table
     // set.  `tables` maps alias-or-name → real table name.

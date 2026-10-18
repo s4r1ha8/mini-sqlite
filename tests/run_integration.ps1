@@ -2,10 +2,10 @@
 # Usage: from repo root:  .\tests\run_integration.ps1
 
 $env:PATH = "C:\Users\sarth\Downloads\w64devkit\bin;" + $env:PATH
-$exe = ".\build\mini_sqlite.exe"
+$exe = ".\build\Debug\mini_sqlite.exe"
 $sqlDir = ".\tests\integration"
 
-$scripts = @("ddl.sql", "select_basic.sql", "select_join.sql", "select_agg.sql", "errors.sql")
+$scripts = @("ddl.sql", "select_basic.sql", "select_join.sql", "select_agg.sql", "errors.sql", "delete.sql", "update.sql", "txn.sql", "select_order_limit.sql")
 
 $pass = 0
 $fail = 0

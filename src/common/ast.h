@@ -195,8 +195,8 @@ struct JoinClause {
 
 // ── ORDER BY item ─────────────────────────────────────────────────────────────
 struct OrderByItem {
-    std::string column;
-    bool        ascending = true; // false → DESC
+    Expr expr;
+    bool ascending = true; // false → DESC
 };
 
 // ── Statement node types ─────────────────────────────────────────────────────
@@ -218,15 +218,39 @@ struct InsertStmt {
 };
 
 struct SelectStmt {
-    // columns: ["*"] or explicit list, may be qualified as "table.column"
+    // columns: ["*"] or explicit column names, may be qualified as "table.column".
+    // Aggregate expressions are stored separately in aggregate_columns.
     std::vector<std::string>  columns;
+
+    // Aggregate expressions appearing in the SELECT list, in SELECT-list order.
+    // Examples:
+    //   COUNT(*)
+    //   SUM(salary)
+    //   AVG(age)
+    std::vector<AggregateCall> aggregate_columns;
+
     std::vector<TableRef>     from;
     std::vector<JoinClause>   joins;
     std::optional<Expr>       where;
-    std::optional<std::vector<std::string>>  group_by;
-    std::optional<Expr>                      having;   // HAVING expr (only valid with GROUP BY)
+    std::optional<std::vector<std::string>> group_by;
+    std::optional<Expr>                      having;
     std::optional<std::vector<OrderByItem>>  order_by;
-    std::optional<int64_t>    limit;           // LIMIT n (M2+)
+    std::optional<int64_t>                   limit;
+};
+struct Assignment {
+    std::string column;
+    Expr        value;
+};
+
+struct UpdateStmt {
+    std::string             table_name;
+    std::vector<Assignment> updates;
+    std::optional<Expr>     where;
+};
+
+struct DeleteStmt {
+    std::string         table_name;
+    std::optional<Expr> where;
 };
 
 struct TxnStmt {
@@ -239,5 +263,7 @@ using Statement = std::variant<
     CreateIndexStmt,
     InsertStmt,
     SelectStmt,
+    UpdateStmt,
+    DeleteStmt,
     TxnStmt
 >;

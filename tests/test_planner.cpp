@@ -148,7 +148,7 @@ static void testOrderBy() {
     const SortOp* sort = asSort(*proj->child);
     CHECK(sort != nullptr, "sort: next is Sort");
     CHECK(sort->order_by.size() == 1,          "sort: 1 order item");
-    CHECK(sort->order_by[0].column == "name",  "sort: column=name");
+    CHECK(std::get<ColumnRef>(sort->order_by[0].expr.node).column == "name",  "sort: column=name");
     CHECK(sort->order_by[0].ascending == false,"sort: DESC");
     const SeqScanOp* scan = asSeqScan(*sort->child);
     CHECK(scan != nullptr, "sort: leaf is SeqScan");
