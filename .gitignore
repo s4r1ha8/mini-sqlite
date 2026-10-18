@@ -1,0 +1,22 @@
+# Build directories
+/build/
+/build_integration/
+/.vs/
+/out/
+
+# Local database instances
+/mini_sqlite.db
+/mini_sqlite.db.wal
+/integration_runtime_test.db
+/integration_runtime_test.db.wal
+
+# Test database artifacts
+test_*.db
+test_*.db.wal
+test_*.db.bak
+smoke.db
+smoke.db.wal
+smoke.sql.wal
+test.db
+test.db.wal
+h3.db.wal
