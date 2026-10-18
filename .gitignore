@@ -3,6 +3,25 @@
 /build_integration/
 /.vs/
 /out/
+CMakeSettings.json
+
+# Binary outputs & debug symbols
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.dll
+
+# Visual Studio & IDE files
+*.user
+*.suo
+.vscode/
+
+# Logs & build state
+*.log
+*.tlog
+*.lastbuildstate
 
 # Local database instances
 /mini_sqlite.db
